@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ruleta de Mashi</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+        :root {
+            --tg-theme-bg-color: #212121;
+            --tg-theme-text-color: #ffffff;
+            --tg-theme-button-color: #5288c1;
+            --tg-theme-button-text-color: #ffffff;
+            --gold-color: #FFD700;
+        }
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        .header {
+            width: 100%;
+            padding: 10px;
+            border-bottom: 1px solid var(--gold-color);
+        }
+        .points-display {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gold-color);
+        }
+        .machine {
+            margin: 40px 0;
+            font-size: 60px;
+        }
+        .spin-button {
+            width: 80%;
+            padding: 15px;
+            font-size: 20px;
+            font-weight: 700;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+        .spin-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .cost {
+            margin-top: 15px;
+            font-size: 16px;
+            opacity: 0.8;
+        }
+        .status-message {
+            margin-top: 20px;
+            font-size: 18px;
+            min-height: 25px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>Tus Puntos de Lealtad</h2>
+        <div id="points" class="points-display">Cargando...</div>
+    </div>
+
+    <div id="machine" class="machine">🎰</div>
+    
+    <div id="status" class="status-message"></div>
+
+    <button id="spinButton" class="spin-button">GIRAR</button>
+    <p class="cost">Costo: 10 Estrellas de Telegram</p>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        
+        const pointsEl = document.getElementById('points');
+        const spinButton = document.getElementById('spinButton');
+        const machineEl = document.getElementById('machine');
+        const statusEl = document.getElementById('status');
+
+        // URL de tu backend (la que usa ngrok o tu servidor de producción)
+        const BACKEND_URL = "https://tu-backend-url.com";
+
+        // Obtener el ID del usuario de Telegram
+        const userId = tg.initDataUnsafe?.user?.id;
+
+        // Función para obtener los puntos del usuario del backend
+        async function fetchUserData() {
+            if (!userId) {
+                pointsEl.innerText = "Error";
+                spinButton.disabled = true;
+                return;
+            }
+            try {
+                const response = await fetch(`${BACKEND_URL}/get_user_data?user_id=${userId}`);
+                const data = await response.json();
+                pointsEl.innerText = data.points;
+            } catch (error) {
+                console.error("Error fetching user data:", error);
+                pointsEl.innerText = "Error de conexión";
+            }
+        }
+
+        // Función para solicitar la factura de pago
+        async function requestSpin() {
+            spinButton.disabled = true;
+            statusEl.innerText = 'Preparando pago...';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/request_spin_invoice`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_id: userId })
+                });
+                const result = await response.json();
+
+                if (!result.ok) {
+                    throw new Error(result.error || 'No se pudo generar la factura.');
+                }
+                
+                // La factura se ha enviado por el bot. La Mini App no necesita hacer más aquí.
+                // El usuario completará el pago en el chat.
+                statusEl.innerText = 'Revisa tu chat con el bot para completar el pago.';
+                tg.close(); // Cerramos la app para que el usuario vea el chat
+
+            } catch (error) {
+                console.error("Error requesting spin:", error);
+                statusEl.innerText = `Error: ${error.message}`;
+                spinButton.disabled = false;
+            }
+        }
+
+        // Inicializar la app
+        window.addEventListener('load', fetchUserData);
+        spinButton.addEventListener('click', requestSpin);
+    </script>
+</body>
+</html>
