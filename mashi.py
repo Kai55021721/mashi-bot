@@ -11,6 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
+import google.generativeai as genai
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Carga las variables del archivo .env al entorno
@@ -28,10 +29,19 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No se encontró la variable de entorno TELEGRAM_TOKEN.")
 
-OWNER_ID = 1890046858 # ID del Maestro Kai
+OWNER_ID_STR = os.environ.get("OWNER_ID")
+if not OWNER_ID_STR:
+    raise ValueError("No se encontró la variable de entorno OWNER_ID.")
+OWNER_ID = int(OWNER_ID_STR)
+
+# --- 1.1 CONFIGURACIÓN DE GEMINI ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    logger.info("API Key de Gemini cargada correctamente.")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data_v2.db')
+DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 
 ITCH_URL = "https://kai-shitsumon.itch.io/"  # Reemplaza con URL de itch.io del juego
 
@@ -86,7 +96,6 @@ def db_safe_run(query, params=(), fetchone=False, commit=False):
 def setup_database():
     db_safe_run('CREATE TABLE IF NOT EXISTS subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, joined_at TEXT)')
     db_safe_run('CREATE TABLE IF NOT EXISTS mod_logs (action TEXT, target_id INTEGER, timestamp TEXT)')
-    db_safe_run('CREATE TABLE IF NOT EXISTS scores (id INTEGER PRIMARY KEY, user_id INTEGER, username TEXT, score INTEGER, level INTEGER, timestamp TEXT)')
     logger.info(f"Base de datos preparada en la ruta: {DB_FILE}")
 
 async def ensure_user(user: User, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,7 +130,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🌈 /paleta - Tonos divinos.\n"
         "• 💡 /idea - Visiones fugaces.\n"
         "• 🛒 /tienda - Ofrendas en itch.io.\n"
-        "• 🎮 /juego - Defiende el templo de invasores.\n\n"
         "Habla con respeto. La luz guía a los dignos."
     )
     
@@ -130,52 +138,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(texto_bienvenida, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
-async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto_relato = "El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.\n\n" + random.choice(RELATOS_DEL_GUARDIAN)
-    await update.message.reply_text(texto_relato)
+# --- 4.1. COMANDOS DE CONTENIDO ALEATORIO (REFACTORIZADOS) ---
+async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
+    """Función genérica para enviar un elemento aleatorio de una lista."""
+    chosen_item = random.choice(choices)
+    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
+
+async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
+    if not GEMINI_API_KEY:
+        # Fallback si no hay API Key: usar la lista predefinida
+        await send_random_choice(update, context, "El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.", RELATOS_DEL_GUARDIAN)
+        return
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+        model = genai.GenerativeModel('gemini-pro')
+        prompt = "Actúa como un guardián erudito y caído de un templo antiguo. Escribe un micro-relato (máximo 4 frases) sobre un eco del pasado, una gloria olvidada o la fugacidad de los mortales. Usa un tono solemne y misterioso."
+        response = await model.generate_content_async(prompt)
+        
+        await update.message.reply_text(f"El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.\n\n{response.text}")
+    except Exception as e:
+        logger.error(f"Error generando relato con Gemini: {e}")
+        await update.message.reply_text("Los ecos del pasado se resisten a manifestarse. Inténtalo de nuevo más tarde.")
 
 async def chiste(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto_chiste = "El silencio es sagrado, pero incluso un guardián puede permitirse una ligera distorsión de la realidad.\n\n" + random.choice(CHISTES_DEL_GUARDIAN)
-    await update.message.reply_text(texto_chiste)
+    await send_random_choice(update, context, "El silencio es sagrado, pero incluso un guardián puede permitirse una ligera distorsión de la realidad.", CHISTES_DEL_GUARDIAN)
 
 async def inspiracion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prompt = random.choice(PROMPTS_INSPIRACION)
-    texto = f"Inspiración del guardián: {prompt}. Que tu pluma capture su esencia."
-    await update.message.reply_text(texto)
+    await send_random_choice(update, context, "Inspiración del guardián. Que tu pluma capture su esencia:", PROMPTS_INSPIRACION)
 
 async def paleta(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    paleta = random.choice(PALETAS_COLOR)
-    texto = f"Paleta del templo: {paleta}. Usa estos tonos para invocar visiones."
-    await update.message.reply_text(texto)
+    await send_random_choice(update, context, "Paleta del templo. Usa estos tonos para invocar visiones:", PALETAS_COLOR)
 
 async def idea(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    idea = random.choice(IDEAS_RAPIDAS)
-    texto = f"Idea fugaz: {idea}. Dibújala antes de que el velo la reclame."
-    await update.message.reply_text(texto)
+    await send_random_choice(update, context, "Idea fugaz. Dibújala antes de que el velo la reclame:", IDEAS_RAPIDAS)
 
 async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Explora las Ofrendas", web_app=WebAppInfo(url=ITCH_URL))]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     texto = "Entra al santuario de creaciones del guardián. Adquiere visiones eternas."
     await update.message.reply_text(texto, reply_markup=reply_markup)
-
-async def juego(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🎮 Jugar Invaders del Guardián", web_app=WebAppInfo(url=ITCH_URL))]]  # Usa URL de itch.io del juego
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    texto = "¡Defiende el templo estelar de la invasión! Muestra tu valor, mortal."
-    await update.message.reply_text(texto, reply_markup=reply_markup)
-
-async def web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = update.effective_message.web_app_data.data
-    try:
-        score_data = json.loads(data)
-        user = update.effective_user
-        db_safe_run("INSERT INTO scores (user_id, username, score, level, timestamp) VALUES (?, ?, ?, ?, ?)", 
-                    (user.id, user.username or user.first_name, score_data.get('score', 0), score_data.get('level', 1), datetime.now().isoformat()), commit=True)
-        await update.message.reply_text(f"¡Puntuación {score_data.get('score', 0)} guardada en el templo, {user.mention_html()}! Nivel {score_data.get('level', 1)}. La luz te bendice.", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"Error guardando score: {e}")
-        await update.message.reply_text("Error al guardar. Intenta de nuevo.")
     
 @owner_only
 async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,7 +188,7 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_to_message.delete()
         await update.message.delete()
-        msg = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="La luz purifica. Una sombra ha sido desterrada de este lugar sagrado."
         )
@@ -206,7 +208,7 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.ban_chat_member(update.effective_chat.id, target.id)
         await update.message.delete()
-        msg = await context.bot.send_message(chat_id=update.effective_chat.id, text=f"El hereje {target.mention_html()} ha sido exiliado del templo.", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"El hereje {target.mention_html()} ha sido exiliado del templo.", parse_mode=ParseMode.HTML)
         db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                     ("exilio", target.id, datetime.now().isoformat()), commit=True)
     except Exception as e:
@@ -228,12 +230,10 @@ def main() -> None:
         CommandHandler("paleta", paleta),
         CommandHandler("idea", idea),
         CommandHandler("tienda", tienda),
-        CommandHandler("juego", juego),
         CommandHandler("purificar", purificar),
         CommandHandler("exilio", exilio),
     ]
     application.add_handlers(command_handlers)
-    application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, web_app_data))
 
     logger.info("El bot Mashi está en línea y vigilando.")
     application.run_polling()
