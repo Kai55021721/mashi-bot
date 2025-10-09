@@ -48,49 +48,43 @@ Además de sus funciones de moderación en Telegram, el bot ejecuta un **servido
 *   `/purificar`: (Habilidad: "Luz Purificadora") Se usa **respondiendo a un mensaje** que se desea borrar. Mashi elimina el mensaje original y el comando.
 *   `/actualizar_banner`: Actualiza y edita un mensaje de banner predefinido en el canal, posiblemente usando `requests` para obtener datos y `Pillow` para modificar la imagen `subscribestar_banner.png`.
 
-## 5. Flujo de Trabajo: Cómo Editar y Actualizar el Bot
+## 5. Flujo de Trabajo y Despliegue
 
-El flujo de trabajo general se mantiene, pero el script ahora es más complejo.
+El proceso de edición, versionamiento y despliegue se ha simplificado.
 
-### **Paso A: Detener el Bot en el Servidor (Opcional pero recomendado)**
-
-1.  Conéctate al servidor por **SSH**.
-2.  Ejecuta: `sudo systemctl stop telegram-bot.service`
-
-### **Paso B: Editar el Código en tu PC**
+### **Paso 1: Editar el Código en tu PC**
 
 1.  Abre el proyecto en **Visual Studio Code**.
-2.  Realiza los cambios en `mashi.py`, `index.html` u otros archivos.
+2.  Realiza los cambios necesarios en los archivos del proyecto.
 
-### **Paso C: Probar los Cambios en Local**
+### **Paso 2: Probar los Cambios en Local (Recomendado)**
 
-1.  Asegúrate de que el bot en el servidor esté detenido.
-2.  En la terminal de VS Code, activa el entorno virtual: `& C:/Users/Kai/Documents/mashi_bot/.venv/Scripts/Activate.ps1`
-3.  Ejecuta el bot en tu PC: `python mashi.py`
-4.  Abre Telegram y prueba los comandos. Abre un navegador y visita `http://127.0.0.1:5000` (o el puerto que hayas configurado) para probar la página de estado.
-5.  Detén el script con `Ctrl + C`.
+1.  En una terminal, activa el entorno virtual: `& .\.venv\Scripts\Activate.ps1`
+2.  Ejecuta el bot en tu PC: `python mashi.py`
+3.  Prueba las nuevas funcionalidades en Telegram y en el navegador (`http://127.0.0.1:5000`).
+4.  Detén el script con `Ctrl + C`.
 
-### **Paso D: Guardar los Cambios en GitHub**
+### **Paso 3: Guardar y Subir los Cambios a GitHub**
 
 1.  Prepara los archivos: `git add .`
-2.  Guarda los cambios: `git commit -m "Tu mensaje descriptivo"`
-3.  Sube los cambios: `git push`
+2.  Guarda los cambios con un mensaje claro: `git commit -m "Tu mensaje descriptivo"`
+3.  Sube los cambios al repositorio remoto: `git push`
 
-### **Paso E: Actualizar el Código en el Servidor**
+### **Paso 4: Desplegar en el Servidor (Automático)**
 
-1.  Conéctate al servidor por **SSH**.
-2.  Navega a la carpeta del bot: `cd mashi-bot`
-3.  Descarga la última versión: `git pull`
-4.  (Opcional) Si añadiste nuevas librerías, actualiza las dependencias: `pip install -r requirements.txt`
+1.  Ejecuta el script de despliegue:
+    `deploy.bat`
+2.  El script se encargará de conectarse al servidor, descargar los últimos cambios (`git pull`) y reiniciar el servicio del bot (`systemd`). Al finalizar, mostrará el estado del servicio para confirmar que todo está funcionando.
 
-### **Paso F: Reiniciar el Bot en el Servidor**
+## 6. Entorno de Desarrollo
 
-1.  Reinicia el servicio para aplicar los cambios:
-    `sudo systemctl restart telegram-bot.service`
-2.  Verifica que todo funcione correctamente (el servicio debe estar `active (running)`):
-    `sudo systemctl status telegram-bot.service`
+### Extensiones Recomendadas
 
-## 6. Gestión del Servidor (Cheatsheet de Comandos)
+Para una mejor experiencia de desarrollo en Visual Studio Code, se recomienda instalar la siguiente extensión:
+
+*   **Gemini Code Assist (`google.geminicodeassist`)**: Asistente de código basado en IA para autocompletado, generación de código y más. La recomendación se encuentra en el archivo `.vscode/extensions.json`.
+
+## 7. Gestión del Servidor (Cheatsheet de Comandos)
 
 Los comandos de `systemd` para gestionar el servicio no cambian:
 
