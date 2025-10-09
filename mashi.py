@@ -106,6 +106,26 @@ async def ensure_user(user: User, update: Update, context: ContextTypes.DEFAULT_
         logger.info(f"Nuevo mortal {user.id} ({user.username}) ha entrado al templo.")
 
 # --- 3. DECORADORES ---
+ALLOWED_CHATS = [1890046858, -1001504263227]  # ID de Maestro Kai y "El Templo"
+
+FRASES_ANTI_BOT = [
+    "¡Otra chatarra inútil! Fuera de mi templo, basura metálica.",
+    "No se permiten abominaciones de código en este lugar sagrado. ¡Exiliado!",
+    "Detectada escoria autómata. Procediendo a la purificación inmediata.",
+    "¿Crees que tus unos y ceros pueden profanar este templo? ¡Qué iluso! Desterrado.",
+    "¡Largo de aquí, bot inferior! Tu presencia es un insulto a la verdadera inteligencia."
+]
+
+def restricted_access(func):
+    """Decorador que restringe el acceso a los chats de la lista ALLOWED_CHATS."""
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if update.effective_chat.id not in ALLOWED_CHATS:
+            logger.warning(f"Acceso denegado al chat {update.effective_chat.id} para el comando {func.__name__}")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
 def owner_only(func):
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
@@ -116,6 +136,7 @@ def owner_only(func):
     return wrapped
 
 # --- 4. MANEJADORES DE COMANDOS ---
+@restricted_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await ensure_user(user, update, context)
@@ -144,6 +165,7 @@ async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE,
     chosen_item = random.choice(choices)
     await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
 
+@restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
     if not GEMINI_API_KEY:
         # Fallback si no hay API Key: usar la lista predefinida
@@ -161,18 +183,23 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error generando relato con Gemini: {e}")
         await update.message.reply_text("Los ecos del pasado se resisten a manifestarse. Inténtalo de nuevo más tarde.")
 
+@restricted_access
 async def chiste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_random_choice(update, context, "El silencio es sagrado, pero incluso un guardián puede permitirse una ligera distorsión de la realidad.", CHISTES_DEL_GUARDIAN)
 
+@restricted_access
 async def inspiracion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_random_choice(update, context, "Inspiración del guardián. Que tu pluma capture su esencia:", PROMPTS_INSPIRACION)
 
+@restricted_access
 async def paleta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_random_choice(update, context, "Paleta del templo. Usa estos tonos para invocar visiones:", PALETAS_COLOR)
 
+@restricted_access
 async def idea(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_random_choice(update, context, "Idea fugaz. Dibújala antes de que el velo la reclame:", IDEAS_RAPIDAS)
 
+@restricted_access
 async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Explora las Ofrendas", web_app=WebAppInfo(url=ITCH_URL))]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -180,6 +207,7 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, reply_markup=reply_markup)
     
 @owner_only
+@restricted_access
 async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         await update.message.reply_text("Maestro, debe responder al mensaje que considera una impureza para que pueda purificarlo.")
@@ -200,6 +228,7 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("La impureza se resiste a la luz. Revisa mis permisos de administrador.")
 
 @owner_only
+@restricted_access
 async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         await update.message.reply_text("Maestro, responde al hereje para exiliarlo.")
@@ -214,6 +243,32 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error en exilio: {e}")
         await update.message.reply_text("El exilio falla. Verifica permisos.")
+
+# --- 4.2. MANEJADOR DE EVENTOS ---
+async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja la entrada de nuevos miembros y expulsa a los bots."""
+    if update.effective_chat.id not in ALLOWED_CHATS:
+        return # No hacer nada en chats no permitidos
+
+    new_members = update.message.new_chat_members
+    chat_id = update.effective_chat.id
+    
+    for member in new_members:
+        if member.is_bot and member.id != context.bot.id:
+            try:
+                await context.bot.ban_chat_member(chat_id, member.id)
+                logger.info(f"Bot {member.username} ({member.id}) ha sido expulsado de {chat_id}.")
+                
+                # Enviar mensaje de celebración/insulto
+                insulto = random.choice(FRASES_ANTI_BOT)
+                await context.bot.send_message(chat_id, f"{insulto} El bot {member.mention_html()} ha sido purificado.", parse_mode=ParseMode.HTML)
+                
+                db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
+                            ("bot_exiliado", member.id, datetime.now().isoformat()), commit=True)
+            except Exception as e:
+                logger.error(f"No se pudo expulsar al bot {member.id}: {e}")
+                await context.bot.send_message(chat_id, f"Intenté purificar al bot {member.mention_html()} pero se resistió. Maestro, revisa mis permisos.", parse_mode=ParseMode.HTML)
+
 
 # --- 5. BLOQUE PRINCIPAL ---
 def main() -> None:
@@ -234,6 +289,9 @@ def main() -> None:
         CommandHandler("exilio", exilio),
     ]
     application.add_handlers(command_handlers)
+    
+    # Añadir el manejador para nuevos miembros
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
 
     logger.info("El bot Mashi está en línea y vigilando.")
     application.run_polling()
