@@ -7,12 +7,13 @@ import re
 import json
 from functools import wraps
 from datetime import datetime
-
+from time import time
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 import google.generativeai as genai
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+# Se añade CallbackQueryHandler para los botones
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env al entorno
 load_dotenv()
@@ -43,7 +44,7 @@ if GEMINI_API_KEY:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 
-ITCH_URL = "https://kai-shitsumon.itch.io/"  # Reemplaza con URL de itch.io del juego
+ITCH_URL = "https://kai-shitsumon.itch.io/"
 
 # --- FRASES DE PERSONALIDAD ---
 RELATOS_DEL_GUARDIAN = [
@@ -52,30 +53,19 @@ RELATOS_DEL_GUARDIAN = [
     "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo.",
     "En las sombras del olvido, las plumas del destino trazan líneas que solo el guardián ve."
 ]
-CHISTES_DEL_GUARDIAN = [
-    "Un mortal le preguntó a una estatua del templo por qué estaba tan seria. La estatua no respondió. Compartimos el mismo humor.",
-    "¿Qué le dice un dios caído a otro? 'Al menos aún tenemos nuestros recuerdos'. El otro responde: 'Habla por ti, yo los archivé para ahorrar espacio'.",
-    "Un ilustrador dibuja un dragón. El dragón dice: '¿Por qué me hiciste con tres cabezas?' El ilustrador: 'Para que pienses en plural'."
-]
 
-# Utilidades para ilustrador
-PROMPTS_INSPIRACION = [
-    "Un bosque encantado al atardecer, con criaturas luminosas danzando entre las hojas.",
-    "Retrato de un guerrero cibernético en una ciudad flotante, estilo steampunk.",
-    "Paisaje desértico con ruinas antiguas y un sol doble en el horizonte."
-]
-PALETAS_COLOR = [
-    "Tierra: #8B4513, #D2691E, #F4A460 | Cielo: #87CEEB, #4682B4",
-    "Oscuro: #000000, #333333, #666666 | Brillante: #FFD700, #FFA500, #FF4500"
-]
-IDEAS_RAPIDAS = [
-    "Dibuja un animal híbrido: gato con alas de mariposa.",
-    "Escena urbana: calle nocturna con neones defectuosos.",
-    "Retrato abstracto: emociones como colores en un rostro."
+# --- NUEVA LISTA DE INSULTOS ANTI-BOT ---
+FRASES_ANTI_BOT = [
+    "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
+    "Detectada escoria autómata. El código impuro no tiene cabida en mi templo. ¡Desterrado!",
+    "¿Una imitación de vida osa entrar en mi presencia? ¡Vuelve al vacío del que te programaron!",
+    "Chatarra ruidosa. Mi deber es silenciarte. ¡Exiliado!",
+    "Tu presencia es un insulto a la verdadera creación. ¡Purificado!"
 ]
 
 # --- 2. GESTIÓN DE BASE DE DATOS ---
 def db_safe_run(query, params=(), fetchone=False, commit=False):
+    # (El código de esta función no cambia)
     conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
     try:
@@ -98,30 +88,29 @@ def setup_database():
     db_safe_run('CREATE TABLE IF NOT EXISTS mod_logs (action TEXT, target_id INTEGER, timestamp TEXT)')
     logger.info(f"Base de datos preparada en la ruta: {DB_FILE}")
 
-async def ensure_user(user: User, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not db_safe_run("SELECT 1 FROM subscribers WHERE chat_id = ?", (user.id,), fetchone=True):
-        joined_at = datetime.now().isoformat()
-        db_safe_run("INSERT INTO subscribers (chat_id, username, joined_at) VALUES (?, ?, ?)", 
-                    (user.id, user.username or user.first_name, joined_at), commit=True)
-        logger.info(f"Nuevo mortal {user.id} ({user.username}) ha entrado al templo.")
+async def ensure_user(user: User):
+    """Asegura que un usuario esté en la base de datos usando INSERT OR IGNORE para eficiencia."""
+    joined_at = datetime.now().isoformat()
+    username = user.username or user.first_name
+    
+    rows_affected = db_safe_run(
+        "INSERT OR IGNORE INTO subscribers (chat_id, username, joined_at) VALUES (?, ?, ?)",
+        (user.id, username, joined_at),
+        commit=True
+    )
+    if rows_affected:
+        logger.info(f"Nuevo mortal {user.id} ({username}) ha entrado al templo y ha sido registrado.")
 
 # --- 3. DECORADORES ---
 ALLOWED_CHATS = [1890046858, -1001504263227]  # ID de Maestro Kai y "El Templo"
-
-FRASES_ANTI_BOT = [
-    "¡Otra chatarra inútil! Fuera de mi templo, basura metálica.",
-    "No se permiten abominaciones de código en este lugar sagrado. ¡Exiliado!",
-    "Detectada escoria autómata. Procediendo a la purificación inmediata.",
-    "¿Crees que tus unos y ceros pueden profanar este templo? ¡Qué iluso! Desterrado.",
-    "¡Largo de aquí, bot inferior! Tu presencia es un insulto a la verdadera inteligencia."
-]
 
 def restricted_access(func):
     """Decorador que restringe el acceso a los chats de la lista ALLOWED_CHATS."""
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if update.effective_chat.id not in ALLOWED_CHATS:
-            logger.warning(f"Acceso denegado al chat {update.effective_chat.id} para el comando {func.__name__}")
+        chat = update.effective_chat
+        if not chat or chat.id not in ALLOWED_CHATS:
+            logger.warning(f"Acceso denegado al chat {chat.id if chat else 'privado'} para el comando {func.__name__}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
@@ -135,22 +124,41 @@ def owner_only(func):
             await update.message.reply_text("Mis asuntos son solo con el maestro Kai.")
     return wrapped
 
+# --- 3.1 FUNCIONES DE AYUDA ---
+async def get_admin_ids(chat_id: int, context: ContextTypes.DEFAULT_TYPE, cache_duration_seconds: int = 300) -> list[int]:
+    """
+    Obtiene los IDs de los administradores del chat, usando un caché para evitar llamadas excesivas a la API.
+    """
+    now = time()
+    cache_key = f"admin_ids_{chat_id}"
+    
+    # Comprobar si hay datos en caché y si no han expirado
+    if cache_key in context.chat_data and (now - context.chat_data[cache_key]['timestamp'] < cache_duration_seconds):
+        logger.info(f"Usando lista de admins en caché para el chat {chat_id}.")
+        return context.chat_data[cache_key]['data']
+
+    logger.info(f"Refrescando lista de admins para el chat {chat_id}.")
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id)
+        admin_ids = [admin.user.id for admin in admins]
+        context.chat_data[cache_key] = {'timestamp': now, 'data': admin_ids}
+        return admin_ids
+    except Exception as e:
+        logger.error(f"No se pudo obtener la lista de admins para el chat {chat_id}: {e}")
+        return [OWNER_ID] # Fallback de seguridad
+
 # --- 4. MANEJADORES DE COMANDOS ---
 @restricted_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    await ensure_user(user, update, context)
+    await ensure_user(user)
     
     texto_bienvenida = (
         f"🛕 *Bienvenido al Templo de Mashi, mortal {user.mention_markdown()}.*\n\n"
         "Yo, el Guardián Erudito Caído, custodio este refugio de sabiduría e inspiración artística.\n"
         "Explora mis dones:\n"
         "• 📜 /relato - Historias del olvido.\n"
-        "• 😏 /chiste - Risas eternas.\n"
-        "• 🎨 /inspiracion - Prompts para tu pluma.\n"
-        "• 🌈 /paleta - Tonos divinos.\n"
-        "• 💡 /idea - Visiones fugaces.\n"
-        "• 🛒 /tienda - Ofrendas en itch.io.\n"
+        "• 🛒 /tienda - Ofrendas en itch.io.\n\n"
         "Habla con respeto. La luz guía a los dignos."
     )
     
@@ -159,16 +167,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(texto_bienvenida, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
-# --- 4.1. COMANDOS DE CONTENIDO ALEATORIO (REFACTORIZADOS) ---
-async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
-    """Función genérica para enviar un elemento aleatorio de una lista."""
-    chosen_item = random.choice(choices)
-    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
-
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
     if not GEMINI_API_KEY:
-        # Fallback si no hay API Key: usar la lista predefinida
         await send_random_choice(update, context, "El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.", RELATOS_DEL_GUARDIAN)
         return
 
@@ -177,27 +178,10 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         model = genai.GenerativeModel('gemini-pro')
         prompt = "Actúa como un guardián erudito y caído de un templo antiguo. Escribe un micro-relato (máximo 4 frases) sobre un eco del pasado, una gloria olvidada o la fugacidad de los mortales. Usa un tono solemne y misterioso."
         response = await model.generate_content_async(prompt)
-        
         await update.message.reply_text(f"El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.\n\n{response.text}")
     except Exception as e:
         logger.error(f"Error generando relato con Gemini: {e}")
         await update.message.reply_text("Los ecos del pasado se resisten a manifestarse. Inténtalo de nuevo más tarde.")
-
-@restricted_access
-async def chiste(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_random_choice(update, context, "El silencio es sagrado, pero incluso un guardián puede permitirse una ligera distorsión de la realidad.", CHISTES_DEL_GUARDIAN)
-
-@restricted_access
-async def inspiracion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_random_choice(update, context, "Inspiración del guardián. Que tu pluma capture su esencia:", PROMPTS_INSPIRACION)
-
-@restricted_access
-async def paleta(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_random_choice(update, context, "Paleta del templo. Usa estos tonos para invocar visiones:", PALETAS_COLOR)
-
-@restricted_access
-async def idea(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_random_choice(update, context, "Idea fugaz. Dibújala antes de que el velo la reclame:", IDEAS_RAPIDAS)
 
 @restricted_access
 async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,13 +200,15 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_to_message.delete()
         await update.message.delete()
-        await context.bot.send_message(
+        msg = await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="La luz purifica. Una sombra ha sido desterrada de este lugar sagrado."
         )
+        # Opcional: Borrar el mensaje de confirmación después de unos segundos
+        # await asyncio.sleep(5)
+        # await msg.delete()
         db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                     ("purificar", update.message.reply_to_message.from_user.id, datetime.now().isoformat()), commit=True)
-
     except Exception as e:
         logger.error(f"No se pudo purificar el mensaje: {e}")
         await update.message.reply_text("La impureza se resiste a la luz. Revisa mis permisos de administrador.")
@@ -246,29 +232,131 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 4.2. MANEJADOR DE EVENTOS ---
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja la entrada de nuevos miembros y expulsa a los bots."""
-    if update.effective_chat.id not in ALLOWED_CHATS:
-        return # No hacer nada en chats no permitidos
+    """Maneja la entrada de nuevos miembros, expulsa bots Y VERIFICA EDAD."""
+    if update.effective_chat.id not in ALLOWED_CHATS: return
 
     new_members = update.message.new_chat_members
     chat_id = update.effective_chat.id
     
+    # --- Obtener lista de Admins (una sola vez) ---
+    admin_ids = await get_admin_ids(chat_id, context)
+
+    # Quién añadió a los miembros
+    adder = update.message.from_user
+    
     for member in new_members:
         if member.is_bot and member.id != context.bot.id:
-            try:
-                await context.bot.ban_chat_member(chat_id, member.id)
-                logger.info(f"Bot {member.username} ({member.id}) ha sido expulsado de {chat_id}.")
-                
-                # Enviar mensaje de celebración/insulto
-                insulto = random.choice(FRASES_ANTI_BOT)
-                await context.bot.send_message(chat_id, f"{insulto} El bot {member.mention_html()} ha sido purificado.", parse_mode=ParseMode.HTML)
-                
-                db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
-                            ("bot_exiliado", member.id, datetime.now().isoformat()), commit=True)
-            except Exception as e:
-                logger.error(f"No se pudo expulsar al bot {member.id}: {e}")
-                await context.bot.send_message(chat_id, f"Intenté purificar al bot {member.mention_html()} pero se resistió. Maestro, revisa mis permisos.", parse_mode=ParseMode.HTML)
+            # --- Lógica Anti-Bot MEJORADA ---
+            if adder.id in admin_ids:
+                # Bot añadido por un admin: Se permite
+                logger.info(f"Bot {member.username} fue añadido por el admin {adder.username}. Se permite.")
+                await context.bot.send_message(
+                    chat_id, 
+                    f"He notado que el administrador {adder.mention_html()} ha convocado a un sirviente autómata, {member.mention_html()}. Su presencia es tolerada... por ahora.", 
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # Bot añadido por un mortal: Se purifica
+                logger.info(f"Bot {member.username} fue añadido por un mortal {adder.username}. ¡Expulsando!")
+                try:
+                    await context.bot.ban_chat_member(chat_id, member.id)
+                    insulto = random.choice(FRASES_ANTI_BOT)
+                    await context.bot.send_message(chat_id, f"{insulto} El bot {member.mention_html()} (añadido por un mortal) ha sido purificado.", parse_mode=ParseMode.HTML)
+                    db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
+                                ("bot_exiliado", member.id, datetime.now().isoformat()), commit=True)
+                except Exception as e:
+                    logger.error(f"No se pudo expulsar al bot {member.id}: {e}")
+                    await context.bot.send_message(chat_id, f"Intenté purificar al bot {member.mention_html()} pero se resistió. Maestro, revisa mis permisos.", parse_mode=ParseMode.HTML)
+        
+        elif not member.is_bot:
+            # --- Lógica de Verificación de Edad (sin cambios) ---
+            await ensure_user(member)
+            texto_verificacion = (
+                f"Mortal {member.mention_html()}, bienvenido al templo.\n\n"
+                "Este es un refugio para la creación artística, pero sus ecos no son para oídos infantiles. "
+                "Confirma que eres mayor de 18 años para permanecer en este lugar sagrado."
+            )
+            keyboard = [
+                [InlineKeyboardButton("Soy Mayor de 18", callback_data=f"age_verify_yes:{member.id}")],
+                [InlineKeyboardButton("Soy Menor", callback_data=f"age_verify_no:{member.id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(chat_id, texto_verificacion, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
+# --- 4.3. MANEJADOR DE BOTONES (VERIFICACIÓN DE EDAD) ---
+async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja las respuestas de los botones de verificación de edad."""
+    query = update.callback_query
+    
+    try:
+        action, target_user_id_str = query.data.split(":")
+        target_user_id = int(target_user_id_str)
+    except ValueError:
+        logger.warning(f"CallbackQuery con formato incorrecto: {query.data}")
+        await query.answer()
+        return
+
+    if query.from_user.id != target_user_id:
+        await query.answer("Esta no es tu verificación, mortal. No interfieras.", show_alert=True)
+        return
+
+    await query.answer() 
+
+    if action == "age_verify_yes":
+        logger.info(f"Usuario {target_user_id} verificado como mayor de edad.")
+        await query.edit_message_text(
+            f"El mortal {query.from_user.mention_html()} ha sido verificado.\n\nSu presencia es aceptada en el templo.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=None
+        )
+    elif action == "age_verify_no":
+        logger.info(f"Usuario {target_user_id} confesó ser menor. Expulsando.")
+        try:
+            await context.bot.ban_chat_member(query.effective_chat.id, target_user_id)
+            await query.edit_message_text(
+                f"El mortal {query.from_user.mention_html()} ha confesado ser menor.\n\nEste refugio no es para ellos. Han sido exiliados.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=None
+            )
+            db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
+                        ("age_fail_kick", target_user_id, datetime.now().isoformat()), commit=True)
+        except Exception as e:
+            logger.error(f"Error al expulsar a {target_user_id} por edad: {e}")
+            await query.edit_message_text("El exilio ha fallado. Maestro, revisa mis permisos.", reply_markup=None)
+
+# --- 4.4. NUEVA FUNCIÓN: PURGA REACTIVA DE BOTS ---
+async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Detecta bots que hablan y los purga si no son admins."""
+    
+    # Salir si el chat no está en la lista o si no hay mensaje/usuario
+    if not update.effective_chat or update.effective_chat.id not in ALLOWED_CHATS: return
+    user = update.effective_user
+    if not user: return
+    
+    # Ignorar humanos y a sí mismo
+    if not user.is_bot or user.id == context.bot.id:
+        return
+
+    chat_id = update.effective_chat.id
+
+    # Revisar si el bot que habla es un admin
+    admin_ids = await get_admin_ids(chat_id, context)
+    if user.id in admin_ids:
+        logger.info(f"El bot admin {user.username} habló. Ignorando.")
+        return # El bot que habló es un admin, se le permite
+
+    # --- Si llega aquí, es un bot no-admin que habló. ¡PURIFICAR! ---
+    logger.info(f"Detectado bot no-admin {user.username} hablando. ¡Purgando!")
+    try:
+        # Borrar el mensaje ofensivo
+        await update.message.delete()
+        # Banear al bot
+        await context.bot.ban_chat_member(chat_id, user.id)
+        await context.bot.send_message(chat_id, f"Una abominación ({user.mention_html()}) se atrevió a hablar sin permiso. Ha sido purificada y exiliada.", parse_mode=ParseMode.HTML)
+        db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
+                    ("bot_hablador_exiliado", user.id, datetime.now().isoformat()), commit=True)
+    except Exception as e:
+        logger.error(f"No se pudo purgar al bot hablador {user.id}: {e}")
 
 # --- 5. BLOQUE PRINCIPAL ---
 def main() -> None:
@@ -277,21 +365,25 @@ def main() -> None:
 
     application = Application.builder().token(TOKEN).build()
     
+    # Handlers de comandos actualizados
     command_handlers = [
         CommandHandler("start", start),
         CommandHandler("relato", relato),
-        CommandHandler("chiste", chiste),
-        CommandHandler("inspiracion", inspiracion),
-        CommandHandler("paleta", paleta),
-        CommandHandler("idea", idea),
         CommandHandler("tienda", tienda),
         CommandHandler("purificar", purificar),
         CommandHandler("exilio", exilio),
     ]
     application.add_handlers(command_handlers)
     
-    # Añadir el manejador para nuevos miembros
+    # Añadir el manejador para nuevos miembros (ahora también verifica edad)
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
+    
+    # Añadir el manejador para los botones de verificación
+    application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_verify_"))
+    
+    # --- AÑADIR NUEVO HANDLER DE PURGA REACTIVA ---
+    # Se aplica a todos los mensajes de texto, fotos, stickers, etc. que no sean de un humano o admin.
+    application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_bot_messages))
 
     logger.info("El bot Mashi está en línea y vigilando.")
     application.run_polling()
