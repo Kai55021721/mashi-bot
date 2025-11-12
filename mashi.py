@@ -86,6 +86,7 @@ def db_safe_run(query, params=(), fetchone=False, commit=False):
 def setup_database():
     db_safe_run('CREATE TABLE IF NOT EXISTS subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, joined_at TEXT)')
     db_safe_run('CREATE TABLE IF NOT EXISTS mod_logs (action TEXT, target_id INTEGER, timestamp TEXT)')
+    db_safe_run('CREATE TABLE IF NOT EXISTS relatos_generados (id INTEGER PRIMARY KEY AUTOINCREMENT, relato_texto TEXT NOT NULL, timestamp TEXT NOT NULL)')
     logger.info(f"Base de datos preparada en la ruta: {DB_FILE}")
 
 async def ensure_user(user: User):
@@ -178,6 +179,16 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         model = genai.GenerativeModel('gemini-pro')
         prompt = "Actúa como un guardián erudito y caído de un templo antiguo. Escribe un micro-relato (máximo 4 frases) sobre un eco del pasado, una gloria olvidada o la fugacidad de los mortales. Usa un tono solemne y misterioso."
         response = await model.generate_content_async(prompt)
+        
+        # --- GUARDAR RELATO EN LA BASE DE DATOS ---
+        db_safe_run(
+            "INSERT INTO relatos_generados (relato_texto, timestamp) VALUES (?, ?)",
+            (response.text, datetime.now().isoformat()),
+            commit=True
+        )
+        logger.info("Nuevo relato de Gemini guardado en la base de datos.")
+        # -----------------------------------------
+
         await update.message.reply_text(f"El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.\n\n{response.text}")
     except Exception as e:
         logger.error(f"Error generando relato con Gemini: {e}")
