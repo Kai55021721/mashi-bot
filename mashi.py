@@ -176,7 +176,7 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = "Actúa como un guardián erudito y caído de un templo antiguo. Escribe un micro-relato (máximo 4 frases) sobre un eco del pasado, una gloria olvidada o la fugacidad de los mortales. Usa un tono solemne y misterioso."
         response = await model.generate_content_async(prompt)
         
