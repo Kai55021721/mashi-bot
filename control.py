@@ -21,7 +21,7 @@ import os
 
 # Configuración SSH (ajusta según tu setup)
 SSH_USER = "javierhorta2024"
-SSH_HOST = "instance-20251004-005005@34.172.219.194"
+SSH_HOST = "34.172.219.194"  # IP de la instancia (instance-20251004-005005)
 REMOTE_DIR = "mashi-bot"
 SERVICE_NAME = "telegram-bot.service"
 
