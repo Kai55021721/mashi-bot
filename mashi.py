@@ -1,4 +1,6 @@
-# --- 0. IMPORTS Y CONFIGURACIÓN INICIAL ---
+###############################################################################
+# BLOQUE 1: IMPORTS Y CONFIGURACIÓN INICIAL
+###############################################################################
 import os
 import random
 import logging
@@ -7,46 +9,60 @@ import re
 import json
 from functools import wraps
 from datetime import datetime
-from time import time
+
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 import google.generativeai as genai
-# Se añade CallbackQueryHandler para los botones
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
-# Carga las variables del archivo .env al entorno
+# Carga las variables del archivo .env
 load_dotenv()
 
-# Configuración de logging
+# Configuración de logging (Registro de eventos)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- 1. CONFIGURACIÓN CENTRALIZADA Y CONSTANTES ---
+
+###############################################################################
+# BLOQUE 2: CONSTANTES Y CONFIGURACIÓN
+###############################################################################
+
+# Tokens e IDs
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
-    raise ValueError("No se encontró la variable de entorno TELEGRAM_TOKEN.")
+    raise ValueError("ERROR: No se encontró TELEGRAM_TOKEN en el archivo .env")
 
 OWNER_ID_STR = os.environ.get("OWNER_ID")
 if not OWNER_ID_STR:
-    raise ValueError("No se encontró la variable de entorno OWNER_ID.")
+    raise ValueError("ERROR: No se encontró OWNER_ID en el archivo .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# --- 1.1 CONFIGURACIÓN DE GEMINI ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("API Key de Gemini cargada correctamente.")
 
+# Rutas de Archivos
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 
+# URLs Externas
 ITCH_URL = "https://kai-shitsumon.itch.io/"
 
-# --- FRASES DE PERSONALIDAD ---
+# Listas de Configuración
+ALLOWED_CHATS = [1890046858, -1001504263227]  # [ID Maestro Kai, ID El Templo]
+
+# IDs Especiales de Telegram (Canales y Admins Anónimos) - ¡CRUCIAL PARA EVITAR ERRORES!
+# 777000 = Telegram Service
+# 1087968824 = Group Anonymous Bot
+# 136817688 = Channel Bot (Cuando escribes como canal)
+TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
+
+# Textos de Personalidad (Mashi)
 RELATOS_DEL_GUARDIAN = [
     "Los ecos de la gloria pasada resuenan solo para aquellos que saben escuchar el silencio...",
     "Recuerdo imperios de arena y sol que se alzaron y cayeron bajo mi vigilia...",
@@ -54,7 +70,6 @@ RELATOS_DEL_GUARDIAN = [
     "En las sombras del olvido, las plumas del destino trazan líneas que solo el guardián ve."
 ]
 
-# --- NUEVA LISTA DE INSULTOS ANTI-BOT ---
 FRASES_ANTI_BOT = [
     "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
     "Detectada escoria autómata. El código impuro no tiene cabida en mi templo. ¡Desterrado!",
@@ -63,9 +78,13 @@ FRASES_ANTI_BOT = [
     "Tu presencia es un insulto a la verdadera creación. ¡Purificado!"
 ]
 
-# --- 2. GESTIÓN DE BASE DE DATOS ---
+
+###############################################################################
+# BLOQUE 3: BASE DE DATOS
+###############################################################################
+
 def db_safe_run(query, params=(), fetchone=False, commit=False):
-    # (El código de esta función no cambia)
+    """Ejecuta consultas SQL de forma segura."""
     conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
     try:
@@ -84,39 +103,37 @@ def db_safe_run(query, params=(), fetchone=False, commit=False):
         conn.close()
 
 def setup_database():
+    """Crea las tablas si no existen."""
     db_safe_run('CREATE TABLE IF NOT EXISTS subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, joined_at TEXT)')
     db_safe_run('CREATE TABLE IF NOT EXISTS mod_logs (action TEXT, target_id INTEGER, timestamp TEXT)')
-    db_safe_run('CREATE TABLE IF NOT EXISTS relatos_generados (id INTEGER PRIMARY KEY AUTOINCREMENT, relato_texto TEXT NOT NULL, timestamp TEXT NOT NULL)')
-    logger.info(f"Base de datos preparada en la ruta: {DB_FILE}")
+    logger.info(f"Base de datos lista en: {DB_FILE}")
 
 async def ensure_user(user: User):
-    """Asegura que un usuario esté en la base de datos usando INSERT OR IGNORE para eficiencia."""
-    joined_at = datetime.now().isoformat()
-    username = user.username or user.first_name
-    
-    rows_affected = db_safe_run(
-        "INSERT OR IGNORE INTO subscribers (chat_id, username, joined_at) VALUES (?, ?, ?)",
-        (user.id, username, joined_at),
-        commit=True
-    )
-    if rows_affected:
-        logger.info(f"Nuevo mortal {user.id} ({username}) ha entrado al templo y ha sido registrado.")
+    """Registra al usuario en la BD si es nuevo."""
+    if not db_safe_run("SELECT 1 FROM subscribers WHERE chat_id = ?", (user.id,), fetchone=True):
+        joined_at = datetime.now().isoformat()
+        db_safe_run("INSERT INTO subscribers (chat_id, username, joined_at) VALUES (?, ?, ?)", 
+                    (user.id, user.username or user.first_name, joined_at), commit=True)
+        logger.info(f"Nuevo mortal registrado: {user.id} ({user.username})")
 
-# --- 3. DECORADORES ---
-ALLOWED_CHATS = [1890046858, -1001504263227]  # ID de Maestro Kai y "El Templo"
+
+###############################################################################
+# BLOQUE 4: DECORADORES Y UTILIDADES
+###############################################################################
 
 def restricted_access(func):
-    """Decorador que restringe el acceso a los chats de la lista ALLOWED_CHATS."""
+    """Solo permite usar el comando en los chats permitidos."""
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         chat = update.effective_chat
         if not chat or chat.id not in ALLOWED_CHATS:
-            logger.warning(f"Acceso denegado al chat {chat.id if chat else 'privado'} para el comando {func.__name__}")
+            logger.warning(f"Acceso denegado al chat {chat.id if chat else 'privado'} para {func.__name__}")
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
 
 def owner_only(func):
+    """Solo permite usar el comando al dueño (Maestro Kai)."""
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         if update.effective_user.id == OWNER_ID:
@@ -125,30 +142,16 @@ def owner_only(func):
             await update.message.reply_text("Mis asuntos son solo con el maestro Kai.")
     return wrapped
 
-# --- 3.1 FUNCIONES DE AYUDA ---
-async def get_admin_ids(chat_id: int, context: ContextTypes.DEFAULT_TYPE, cache_duration_seconds: int = 300) -> list[int]:
-    """
-    Obtiene los IDs de los administradores del chat, usando un caché para evitar llamadas excesivas a la API.
-    """
-    now = time()
-    cache_key = f"admin_ids_{chat_id}"
-    
-    # Comprobar si hay datos en caché y si no han expirado
-    if cache_key in context.chat_data and (now - context.chat_data[cache_key]['timestamp'] < cache_duration_seconds):
-        logger.info(f"Usando lista de admins en caché para el chat {chat_id}.")
-        return context.chat_data[cache_key]['data']
+async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
+    """Envía un texto aleatorio de una lista."""
+    chosen_item = random.choice(choices)
+    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
 
-    logger.info(f"Refrescando lista de admins para el chat {chat_id}.")
-    try:
-        admins = await context.bot.get_chat_administrators(chat_id)
-        admin_ids = [admin.user.id for admin in admins]
-        context.chat_data[cache_key] = {'timestamp': now, 'data': admin_ids}
-        return admin_ids
-    except Exception as e:
-        logger.error(f"No se pudo obtener la lista de admins para el chat {chat_id}: {e}")
-        return [OWNER_ID] # Fallback de seguridad
 
-# --- 4. MANEJADORES DE COMANDOS ---
+###############################################################################
+# BLOQUE 5: COMANDOS PÚBLICOS
+###############################################################################
+
 @restricted_access
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -163,7 +166,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Habla con respeto. La luz guía a los dignos."
     )
     
-    keyboard = [[InlineKeyboardButton("🛒 Tienda", web_app=WebAppInfo(url=ITCH_URL))]]
+    keyboard = [[InlineKeyboardButton("🛒 Tienda", url=ITCH_URL)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(texto_bienvenida, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
@@ -176,19 +179,10 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         prompt = "Actúa como un guardián erudito y caído de un templo antiguo. Escribe un micro-relato (máximo 4 frases) sobre un eco del pasado, una gloria olvidada o la fugacidad de los mortales. Usa un tono solemne y misterioso."
         response = await model.generate_content_async(prompt)
         
-        # --- GUARDAR RELATO EN LA BASE DE DATOS ---
-        db_safe_run(
-            "INSERT INTO relatos_generados (relato_texto, timestamp) VALUES (?, ?)",
-            (response.text, datetime.now().isoformat()),
-            commit=True
-        )
-        logger.info("Nuevo relato de Gemini guardado en la base de datos.")
-        # -----------------------------------------
-
         await update.message.reply_text(f"El pasado es un eco. Presta atención, y quizás escuches uno de sus susurros.\n\n{response.text}")
     except Exception as e:
         logger.error(f"Error generando relato con Gemini: {e}")
@@ -200,10 +194,16 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     texto = "Entra al santuario de creaciones del guardián. Adquiere visiones eternas."
     await update.message.reply_text(texto, reply_markup=reply_markup)
-    
+
+
+###############################################################################
+# BLOQUE 6: COMANDOS DE ADMINISTRADOR
+###############################################################################
+
 @owner_only
 @restricted_access
 async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Borra el mensaje respondido y el comando."""
     if not update.message.reply_to_message:
         await update.message.reply_text("Maestro, debe responder al mensaje que considera una impureza para que pueda purificarlo.")
         return
@@ -211,15 +211,13 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_to_message.delete()
         await update.message.delete()
-        msg = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="La luz purifica. Una sombra ha sido desterrada de este lugar sagrado."
         )
-        # Opcional: Borrar el mensaje de confirmación después de unos segundos
-        # await asyncio.sleep(5)
-        # await msg.delete()
         db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                     ("purificar", update.message.reply_to_message.from_user.id, datetime.now().isoformat()), commit=True)
+
     except Exception as e:
         logger.error(f"No se pudo purificar el mensaje: {e}")
         await update.message.reply_text("La impureza se resiste a la luz. Revisa mis permisos de administrador.")
@@ -227,6 +225,7 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 @restricted_access
 async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Banea al usuario respondido."""
     if not update.message.reply_to_message:
         await update.message.reply_text("Maestro, responde al hereje para exiliarlo.")
         return
@@ -241,46 +240,57 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error en exilio: {e}")
         await update.message.reply_text("El exilio falla. Verifica permisos.")
 
-# --- 4.2. MANEJADOR DE EVENTOS ---
+
+###############################################################################
+# BLOQUE 7: GESTIÓN DE EVENTOS Y ANTI-BOT
+###############################################################################
+
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja la entrada de nuevos miembros, expulsa bots Y VERIFICA EDAD."""
+    """
+    1. Expulsa bots añadidos por mortales.
+    2. Tolera bots añadidos por admins.
+    3. Inicia verificación de edad para humanos.
+    """
     if update.effective_chat.id not in ALLOWED_CHATS: return
 
     new_members = update.message.new_chat_members
     chat_id = update.effective_chat.id
     
-    # --- Obtener lista de Admins (una sola vez) ---
-    admin_ids = await get_admin_ids(chat_id, context)
+    # Obtener admins para saber quién añadió al bot
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id)
+        admin_ids = [admin.user.id for admin in admins]
+    except Exception as e:
+        logger.error(f"No se pudo obtener lista de admins: {e}")
+        admin_ids = [OWNER_ID]
 
-    # Quién añadió a los miembros
     adder = update.message.from_user
     
     for member in new_members:
+        # CASO A: ES UN BOT
         if member.is_bot and member.id != context.bot.id:
-            # --- Lógica Anti-Bot MEJORADA ---
             if adder.id in admin_ids:
-                # Bot añadido por un admin: Se permite
-                logger.info(f"Bot {member.username} fue añadido por el admin {adder.username}. Se permite.")
+                # Bot añadido por Admin -> Permitir
+                logger.info(f"Bot admin {member.username} permitido.")
                 await context.bot.send_message(
                     chat_id, 
                     f"He notado que el administrador {adder.mention_html()} ha convocado a un sirviente autómata, {member.mention_html()}. Su presencia es tolerada... por ahora.", 
                     parse_mode=ParseMode.HTML
                 )
             else:
-                # Bot añadido por un mortal: Se purifica
-                logger.info(f"Bot {member.username} fue añadido por un mortal {adder.username}. ¡Expulsando!")
+                # Bot añadido por Mortal -> Expulsar
+                logger.info(f"Bot {member.username} expulsado.")
                 try:
                     await context.bot.ban_chat_member(chat_id, member.id)
                     insulto = random.choice(FRASES_ANTI_BOT)
-                    await context.bot.send_message(chat_id, f"{insulto} El bot {member.mention_html()} (añadido por un mortal) ha sido purificado.", parse_mode=ParseMode.HTML)
+                    await context.bot.send_message(chat_id, f"{insulto} El bot {member.mention_html()} ha sido purificado.", parse_mode=ParseMode.HTML)
                     db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                                 ("bot_exiliado", member.id, datetime.now().isoformat()), commit=True)
                 except Exception as e:
-                    logger.error(f"No se pudo expulsar al bot {member.id}: {e}")
-                    await context.bot.send_message(chat_id, f"Intenté purificar al bot {member.mention_html()} pero se resistió. Maestro, revisa mis permisos.", parse_mode=ParseMode.HTML)
-        
+                    logger.error(f"Fallo al expulsar bot: {e}")
+
+        # CASO B: ES UN HUMANO
         elif not member.is_bot:
-            # --- Lógica de Verificación de Edad (sin cambios) ---
             await ensure_user(member)
             texto_verificacion = (
                 f"Mortal {member.mention_html()}, bienvenido al templo.\n\n"
@@ -294,34 +304,30 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup = InlineKeyboardMarkup(keyboard)
             await context.bot.send_message(chat_id, texto_verificacion, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
-# --- 4.3. MANEJADOR DE BOTONES (VERIFICACIÓN DE EDAD) ---
 async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja las respuestas de los botones de verificación de edad."""
+    """Maneja los botones de Soy Mayor / Soy Menor."""
     query = update.callback_query
-    
     try:
         action, target_user_id_str = query.data.split(":")
         target_user_id = int(target_user_id_str)
     except ValueError:
-        logger.warning(f"CallbackQuery con formato incorrecto: {query.data}")
         await query.answer()
         return
 
+    # Seguridad: Solo el usuario aludido puede clicar
     if query.from_user.id != target_user_id:
         await query.answer("Esta no es tu verificación, mortal. No interfieras.", show_alert=True)
         return
 
-    await query.answer() 
+    await query.answer()
 
     if action == "age_verify_yes":
-        logger.info(f"Usuario {target_user_id} verificado como mayor de edad.")
         await query.edit_message_text(
             f"El mortal {query.from_user.mention_html()} ha sido verificado.\n\nSu presencia es aceptada en el templo.",
             parse_mode=ParseMode.HTML,
             reply_markup=None
         )
     elif action == "age_verify_no":
-        logger.info(f"Usuario {target_user_id} confesó ser menor. Expulsando.")
         try:
             await context.bot.ban_chat_member(query.effective_chat.id, target_user_id)
             await query.edit_message_text(
@@ -332,68 +338,71 @@ async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT
             db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                         ("age_fail_kick", target_user_id, datetime.now().isoformat()), commit=True)
         except Exception as e:
-            logger.error(f"Error al expulsar a {target_user_id} por edad: {e}")
             await query.edit_message_text("El exilio ha fallado. Maestro, revisa mis permisos.", reply_markup=None)
 
-# --- 4.4. NUEVA FUNCIÓN: PURGA REACTIVA DE BOTS ---
 async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Detecta bots que hablan y los purga si no son admins."""
-    
-    # Salir si el chat no está en la lista o si no hay mensaje/usuario
+    """
+    PURGA REACTIVA: Si un bot habla, se borra y se banea.
+    ¡CORREGIDO PARA IGNORAR AL SISTEMA DE TELEGRAM!
+    """
     if not update.effective_chat or update.effective_chat.id not in ALLOWED_CHATS: return
     user = update.effective_user
     if not user: return
     
-    # Ignorar humanos y a sí mismo
+    # --- CORRECCIÓN CRÍTICA: IGNORAR TELEGRAM Y ADMINS ANÓNIMOS ---
+    if user.id in TELEGRAM_SYSTEM_IDS:
+        return 
+
+    # Ignorar humanos y a Mashi mismo
     if not user.is_bot or user.id == context.bot.id:
         return
 
+    # Verificar si el bot es admin
     chat_id = update.effective_chat.id
-
-    # Revisar si el bot que habla es un admin
-    admin_ids = await get_admin_ids(chat_id, context)
-    if user.id in admin_ids:
-        logger.info(f"El bot admin {user.username} habló. Ignorando.")
-        return # El bot que habló es un admin, se le permite
-
-    # --- Si llega aquí, es un bot no-admin que habló. ¡PURIFICAR! ---
-    logger.info(f"Detectado bot no-admin {user.username} hablando. ¡Purgando!")
     try:
-        # Borrar el mensaje ofensivo
+        admins = await context.bot.get_chat_administrators(chat_id)
+        admin_ids = [admin.user.id for admin in admins]
+        if user.id in admin_ids:
+            return # Es un bot admin, déjalo hablar
+    except Exception:
+        return # Si falla la verificación, mejor no hacer nada por seguridad
+
+    # Si llegamos aquí, es un bot no autorizado hablando -> PURGAR
+    logger.info(f"Detectado bot intruso {user.username} hablando. Purgando.")
+    try:
         await update.message.delete()
-        # Banear al bot
         await context.bot.ban_chat_member(chat_id, user.id)
         await context.bot.send_message(chat_id, f"Una abominación ({user.mention_html()}) se atrevió a hablar sin permiso. Ha sido purificada y exiliada.", parse_mode=ParseMode.HTML)
         db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", 
                     ("bot_hablador_exiliado", user.id, datetime.now().isoformat()), commit=True)
     except Exception as e:
-        logger.error(f"No se pudo purgar al bot hablador {user.id}: {e}")
+        logger.error(f"No se pudo purgar al bot hablador: {e}")
 
-# --- 5. BLOQUE PRINCIPAL ---
+
+###############################################################################
+# BLOQUE 8: EJECUCIÓN PRINCIPAL
+###############################################################################
+
 def main() -> None:
     logger.info("Iniciando Mashi (Modo Guardián)...")
     setup_database()
 
     application = Application.builder().token(TOKEN).build()
     
-    # Handlers de comandos actualizados
-    command_handlers = [
-        CommandHandler("start", start),
-        CommandHandler("relato", relato),
-        CommandHandler("tienda", tienda),
-        CommandHandler("purificar", purificar),
-        CommandHandler("exilio", exilio),
-    ]
-    application.add_handlers(command_handlers)
+    # 1. Comandos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("relato", relato))
+    application.add_handler(CommandHandler("tienda", tienda))
+    application.add_handler(CommandHandler("purificar", purificar))
+    application.add_handler(CommandHandler("exilio", exilio))
     
-    # Añadir el manejador para nuevos miembros (ahora también verifica edad)
+    # 2. Eventos de entrada (Nuevos miembros)
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     
-    # Añadir el manejador para los botones de verificación
+    # 3. Botones (Verificación edad)
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_verify_"))
     
-    # --- AÑADIR NUEVO HANDLER DE PURGA REACTIVA ---
-    # Se aplica a todos los mensajes de texto, fotos, stickers, etc. que no sean de un humano o admin.
+    # 4. Purga Reactiva (Cualquier mensaje que no sea comando)
     application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_bot_messages))
 
     logger.info("El bot Mashi está en línea y vigilando.")
