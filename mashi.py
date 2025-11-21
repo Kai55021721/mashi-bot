@@ -278,7 +278,7 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"\n\nCHAT RECIENTE:\n{historial}\n\nTU RESPUESTA:"
             )
             
-            model = genai.GenerativeModel('gemini-pro')
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash", generation_config=generation_config)
             response = await model.generate_content_async(prompt)
             respuesta = response.text
             
