@@ -210,31 +210,59 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     Cerebro Conversacional: Decide si responder a mensajes normales.
     """
     # 1. Filtros básicos
-    if not GEMINI_API_KEY: return
+    if not GEMINI_API_KEY: 
+        print("❌ Error: No hay API KEY de Gemini")
+        return
     if not update.message or not update.message.text: return
-    if update.effective_chat.id not in ALLOWED_CHATS: return
+    
+    # NOTA: Comenta esta línea si quieres probar en el chat privado contigo mismo
+    # if update.effective_chat.id not in ALLOWED_CHATS: return
     
     user = update.effective_user
     msg_text = update.message.text
+    
+    # Imprimir en consola local para ver qué llega (DEBUG)
+    print(f"📩 Mensaje recibido de {user.first_name}: {msg_text}")
     
     # 2. Guardar en memoria a corto plazo
     CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
 
     # 3. ¿Debe responder Mashi?
+    
+    # A) Si responden a un mensaje de Mashi
     is_reply = (update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id)
     
-    is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
+    # B) Si el texto contiene palabras clave
+    is_keyword = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
+
+    # C) Si mencionan al bot (@NombreDelBot) - NUEVO
+    is_mentioned = False
+    if update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == "mention":
+                # Verificar si la mención es para este bot
+                # (Telegram a veces lo maneja automático, pero esto ayuda)
+                is_mentioned = True
     
-    # 5% de probabilidad de responder espontáneamente
+    # D) Probabilidad aleatoria (5%)
     random_chance = random.random() < 0.05
 
-    if is_reply or is_mentioned or random_chance:
+    # --- DEBUG: Ver por qué decide hablar ---
+    if is_reply: print("✅ Decisión: Es una respuesta a mí.")
+    elif is_keyword: print("✅ Decisión: Detecté palabra clave.")
+    elif is_mentioned: print("✅ Decisión: Me han mencionado con @.")
+    elif random_chance: print("✅ Decisión: Probabilidad aleatoria activada.")
+    else: print("❌ Decisión: Ignorar mensaje.")
+
+    if is_reply or is_keyword or is_mentioned or random_chance:
         try:
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
             
             # Contexto para la IA
             historial = "\n".join(CHAT_CONTEXT)
+            print("🤔 Consultando a Gemini...") # DEBUG
+            
             prompt = (
                 "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
                 "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
@@ -249,10 +277,11 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
             # Guardar la respuesta propia en el contexto
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
             
+            print(f"🗣️ Respondiendo: {respuesta}") # DEBUG
             await update.message.reply_text(respuesta)
         except Exception as e:
             logger.error(f"Error en conversación: {e}")
-
+            print(f"❌ Error crítico en IA: {e}")
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Expulsa bots mortales, tolera bots admins, verifica edad humanos."""
