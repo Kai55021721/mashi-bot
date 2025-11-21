@@ -48,6 +48,14 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("API Key de Gemini cargada correctamente.")
 
+    # Configuración explícita para usar la versión correcta de la API
+    generation_config = {
+    "temperature": 0.9,
+    "top_p": 1,
+    "top_k": 1,
+    "max_output_tokens": 2048,
+    }
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 ITCH_URL = "https://kai-shitsumon.itch.io/"
@@ -156,7 +164,7 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash", generation_config=generation_config)
         prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
         response = await model.generate_content_async(prompt)
         await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{response.text}", parse_mode=ParseMode.MARKDOWN)
