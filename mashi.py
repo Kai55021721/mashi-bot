@@ -48,21 +48,13 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("API Key de Gemini cargada correctamente.")
 
-# Configuración explícita para usar la versión correcta de la API
-generation_config = {
-  "temperature": 0.9,
-  "top_p": 1,
-  "top_k": 1,
-  "max_output_tokens": 2048,
-}
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 ITCH_URL = "https://kai-shitsumon.itch.io/"
 
 ALLOWED_CHATS = [1890046858, -1001504263227] 
 
-# IDs del Sistema de Telegram (Para evitar que Mashi se ataque a sí mismo o al canal)
+# IDs del Sistema de Telegram
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
 RELATOS_DEL_GUARDIAN = [
@@ -164,7 +156,8 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        model = genai.GenerativeModel('gemini-pro')
+        # CORRECCIÓN: Usar gemini-1.5-flash
+        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
         response = await model.generate_content_async(prompt)
         await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{response.text}", parse_mode=ParseMode.MARKDOWN)
@@ -217,60 +210,27 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     Cerebro Conversacional: Decide si responder a mensajes normales.
     """
-    # 1. Filtros básicos
-    if not GEMINI_API_KEY: 
-        print("❌ Error: No hay API KEY de Gemini")
-        return
+    if not GEMINI_API_KEY: return
     if not update.message or not update.message.text: return
-    
-    # NOTA: Comenta esta línea si quieres probar en el chat privado contigo mismo
-    # if update.effective_chat.id not in ALLOWED_CHATS: return
+    if update.effective_chat.id not in ALLOWED_CHATS: return
     
     user = update.effective_user
     msg_text = update.message.text
     
-    # Imprimir en consola local para ver qué llega (DEBUG)
-    print(f"📩 Mensaje recibido de {user.first_name}: {msg_text}")
-    
-    # 2. Guardar en memoria a corto plazo
     CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
 
-    # 3. ¿Debe responder Mashi?
-    
-    # A) Si responden a un mensaje de Mashi
     is_reply = (update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id)
     
-    # B) Si el texto contiene palabras clave
-    is_keyword = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
-
-    # C) Si mencionan al bot (@NombreDelBot) - NUEVO
-    is_mentioned = False
-    if update.message.entities:
-        for entity in update.message.entities:
-            if entity.type == "mention":
-                # Verificar si la mención es para este bot
-                # (Telegram a veces lo maneja automático, pero esto ayuda)
-                is_mentioned = True
+    is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
     
-    # D) Probabilidad aleatoria (5%)
     random_chance = random.random() < 0.05
 
-    # --- DEBUG: Ver por qué decide hablar ---
-    if is_reply: print("✅ Decisión: Es una respuesta a mí.")
-    elif is_keyword: print("✅ Decisión: Detecté palabra clave.")
-    elif is_mentioned: print("✅ Decisión: Me han mencionado con @.")
-    elif random_chance: print("✅ Decisión: Probabilidad aleatoria activada.")
-    else: print("❌ Decisión: Ignorar mensaje.")
-
-    if is_reply or is_keyword or is_mentioned or random_chance:
+    if is_reply or is_mentioned or random_chance:
         try:
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
             
-            # Contexto para la IA
             historial = "\n".join(CHAT_CONTEXT)
-            print("🤔 Consultando a Gemini...") # DEBUG
-            
             prompt = (
                 "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
                 "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
@@ -278,21 +238,18 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"\n\nCHAT RECIENTE:\n{historial}\n\nTU RESPUESTA:"
             )
             
-            model = genai.GenerativeModel('gemini-pro')
+            # CORRECCIÓN: Usar gemini-1.5-flash
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = await model.generate_content_async(prompt)
             respuesta = response.text
             
-            # Guardar la respuesta propia en el contexto
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
             
-            print(f"🗣️ Respondiendo: {respuesta}") # DEBUG
             await update.message.reply_text(respuesta)
         except Exception as e:
             logger.error(f"Error en conversación: {e}")
-            print(f"❌ Error crítico en IA: {e}")
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Expulsa bots mortales, tolera bots admins, verifica edad humanos."""
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
     new_members = update.message.new_chat_members
@@ -340,7 +297,6 @@ async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT
         except: pass
 
 async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Purga reactiva de bots no autorizados."""
     if not update.effective_chat or update.effective_chat.id not in ALLOWED_CHATS: return
     user = update.effective_user
     if not user or user.id in TELEGRAM_SYSTEM_IDS: return
@@ -352,7 +308,6 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         if user.id in [a.user.id for a in admins]: return
     except: pass
 
-    # Si es bot no admin:
     try:
         await update.message.delete()
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
@@ -376,13 +331,13 @@ def main() -> None:
     application.add_handler(CommandHandler("purificar", purificar))
     application.add_handler(CommandHandler("exilio", exilio))
     
-    # 2. Nuevos miembros
+    # 2. Eventos de entrada (Nuevos miembros)
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     
     # 3. Botones
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
-    # 4. Conversación Humana (¡NUEVO!) - Debe ir antes que la purga
+    # 4. Conversación Humana
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
     
     # 5. Purga Reactiva (Bots)
