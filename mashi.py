@@ -13,7 +13,8 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-import google.generativeai as genai
+# IMPORTANTE: Ya no usamos google.generativeai
+import httpx 
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
@@ -44,9 +45,6 @@ if not OWNER_ID_STR:
 OWNER_ID = int(OWNER_ID_STR)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("API Key de Gemini cargada correctamente.")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
@@ -54,7 +52,6 @@ ITCH_URL = "https://kai-shitsumon.itch.io/"
 
 ALLOWED_CHATS = [1890046858, -1001504263227] 
 
-# IDs del Sistema de Telegram
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
 RELATOS_DEL_GUARDIAN = [
@@ -107,7 +104,56 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: DECORADORES Y UTILIDADES
+# BLOQUE 4: NUEVA FUNCIÓN DE IA (CONEXIÓN DIRECTA)
+###############################################################################
+
+async def consultar_gemini_directo(prompt_sistema, prompt_usuario=""):
+    """
+    Conecta directamente con la API REST de Google, saltándose la librería problemática.
+    Usa el modelo gemini-1.5-flash que es rápido y gratis.
+    """
+    if not GEMINI_API_KEY:
+        return None
+
+    # URL Directa a la API v1beta
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    headers = {'Content-Type': 'application/json'}
+    
+    # Construimos el cuerpo del mensaje manualmente
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"{prompt_sistema}\n\n{prompt_usuario}"}]
+        }],
+        "generationConfig": {
+            "temperature": 0.9,
+            "maxOutputTokens": 800
+        }
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+            
+            if response.status_code != 200:
+                logger.error(f"Error API Google: {response.status_code} - {response.text}")
+                return None
+            
+            data = response.json()
+            # Extraer el texto de la respuesta JSON compleja de Google
+            if "candidates" in data and len(data["candidates"]) > 0:
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                return content
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Excepción conectando a Gemini Directo: {e}")
+            return None
+
+
+###############################################################################
+# BLOQUE 5: DECORADORES Y UTILIDADES
 ###############################################################################
 
 def restricted_access(func):
@@ -134,7 +180,7 @@ async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 ###############################################################################
-# BLOQUE 5: COMANDOS PÚBLICOS
+# BLOQUE 6: COMANDOS PÚBLICOS
 ###############################################################################
 
 @restricted_access
@@ -154,14 +200,17 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not GEMINI_API_KEY:
         await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
-    try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        # CORRECCIÓN: Usar gemini-1.5-flash
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
-        response = await model.generate_content_async(prompt)
-        await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{response.text}", parse_mode=ParseMode.MARKDOWN)
-    except Exception:
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+    
+    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
+    
+    # Usamos la nueva función directa
+    respuesta = await consultar_gemini_directo(prompt)
+    
+    if respuesta:
+        await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
+    else:
         await update.message.reply_text("El éter está nublado. Intenta más tarde.")
 
 @restricted_access
@@ -171,7 +220,7 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 ###############################################################################
-# BLOQUE 6: COMANDOS DE ADMINISTRADOR
+# BLOQUE 7: COMANDOS DE ADMINISTRADOR
 ###############################################################################
 
 @owner_only
@@ -203,13 +252,11 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 ###############################################################################
-# BLOQUE 7: LÓGICA CONVERSACIONAL Y GESTIÓN DE EVENTOS
+# BLOQUE 8: LÓGICA CONVERSACIONAL Y EVENTOS
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Cerebro Conversacional: Decide si responder a mensajes normales.
-    """
+    """ Cerebro Conversacional usando conexión directa """
     if not GEMINI_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
@@ -221,37 +268,29 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
 
     is_reply = (update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id)
-    
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
-    
     random_chance = random.random() < 0.05
 
     if is_reply or is_mentioned or random_chance:
-        try:
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-            
-            historial = "\n".join(CHAT_CONTEXT)
-            prompt = (
-                "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
-                "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
-                "Si te insultan, sé cortante. Si hablan de arte, interésate. "
-                f"\n\nCHAT RECIENTE:\n{historial}\n\nTU RESPUESTA:"
-            )
-            
-            # CORRECCIÓN: Usar gemini-1.5-flash
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = await model.generate_content_async(prompt)
-            respuesta = response.text
-            
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+        
+        historial = "\n".join(CHAT_CONTEXT)
+        prompt_sistema = (
+            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
+            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate."
+        )
+        prompt_usuario = f"CHAT RECIENTE:\n{historial}\n\nTU RESPUESTA:"
+        
+        # Usamos la nueva función directa
+        respuesta = await consultar_gemini_directo(prompt_sistema, prompt_usuario)
+        
+        if respuesta:
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
-            
             await update.message.reply_text(respuesta)
-        except Exception as e:
-            logger.error(f"Error en conversación: {e}")
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id not in ALLOWED_CHATS: return
-    
     new_members = update.message.new_chat_members
     chat_id = update.effective_chat.id
     adder = update.message.from_user
@@ -300,7 +339,6 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_chat or update.effective_chat.id not in ALLOWED_CHATS: return
     user = update.effective_user
     if not user or user.id in TELEGRAM_SYSTEM_IDS: return
-    
     if not user.is_bot or user.id == context.bot.id: return
 
     try:
@@ -316,31 +354,26 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 ###############################################################################
-# BLOQUE 8: EJECUCIÓN PRINCIPAL
+# BLOQUE 9: EJECUCIÓN PRINCIPAL
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi...")
+    logger.info("Iniciando Mashi (Direct Mode)...")
     setup_database()
     application = Application.builder().token(TOKEN).build()
     
-    # 1. Comandos
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("relato", relato))
     application.add_handler(CommandHandler("tienda", tienda))
     application.add_handler(CommandHandler("purificar", purificar))
     application.add_handler(CommandHandler("exilio", exilio))
     
-    # 2. Eventos de entrada (Nuevos miembros)
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
-    
-    # 3. Botones
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
-    # 4. Conversación Humana
+    # Conversación humana (Debe ir antes de purga de bots)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
     
-    # 5. Purga Reactiva (Bots)
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
