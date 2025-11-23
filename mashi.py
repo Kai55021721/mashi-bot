@@ -13,7 +13,8 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-import httpx 
+# Usamos la librería oficial de Hugging Face
+from huggingface_hub import AsyncInferenceClient
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
@@ -43,7 +44,7 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# AHORA USAMOS LA KEY DE HUGGING FACE
+# TOKEN DE HUGGING FACE
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -104,59 +105,43 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (HUGGING FACE)
+# BLOQUE 4: CEREBRO DE IA (LIBRERÍA OFICIAL)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Conecta con la API de Hugging Face usando el modelo Mistral-7B-Instruct-v0.2.
+    Usa el cliente oficial de Hugging Face. Maneja las URLs automáticamente.
     """
     if not HF_API_KEY:
         logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
-    # Usamos la URL de Inferencia clásica para máxima compatibilidad
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    # Inicializamos el cliente oficial (Asíncrono)
+    client = AsyncInferenceClient(token=HF_API_KEY)
+    
+    # Modelo: Mistral v0.2 (Estable)
+    MODELO = "mistralai/Mistral-7B-Instruct-v0.2"
 
-    # Formato de prompt específico para Mistral
+    # Formato Mistral
     full_prompt = f"<s>[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
 
-    payload = {
-        "inputs": full_prompt,
-        "parameters": {
-            "max_new_tokens": 250, 
-            "temperature": 0.7,
-            "return_full_text": False
-        }
-    }
+    try:
+        # logger.info("📡 Conectando con Hugging Face Hub...")
+        response = await client.text_generation(
+            full_prompt, 
+            model=MODELO,
+            max_new_tokens=250,
+            temperature=0.7,
+            return_full_text=False
+        )
+        return response.strip()
 
-    async with httpx.AsyncClient() as client:
-        try:
-            # logger.info(f"📡 Enviando petición a HF...") # Descomentar para debug
-            response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
-            
-            if response.status_code == 503:
-                return "⏳ El oráculo está despertando... (Modelo cargando, intenta en 20s)"
-
-            if response.status_code != 200:
-                logger.error(f"⛔ Error API HF: {response.status_code} - {response.text}")
-                return None
-            
-            data = response.json()
-            
-            # Extracción robusta de la respuesta
-            if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
-                return data[0]["generated_text"].strip()
-            elif isinstance(data, dict) and "generated_text" in data:
-                return data["generated_text"].strip()
-            else:
-                logger.error(f"⚠️ Formato desconocido: {data}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"💥 Excepción HF: {e}")
-            return None
+    except Exception as e:
+        logger.error(f"💥 Error en Cliente HF: {e}")
+        # Si el error es de carga (503), avisamos amablemente
+        if "503" in str(e) or "loading" in str(e).lower():
+            return "⏳ El oráculo está despertando de su sueño... (Intenta en 30s)"
+        return None
 
 
 ###############################################################################
@@ -210,7 +195,7 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt = "Actúa como Mashi, un dios león guardián antiguo. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
+    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato MUY BREVE (máximo 3 frases) sobre una gloria olvidada de tu pasado."
     
     respuesta = await consultar_ia(prompt)
     
@@ -274,7 +259,6 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     is_reply = (update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
-    # 5% de probabilidad de respuesta espontánea
     random_chance = random.random() < 0.05
 
     if is_reply or is_mentioned or random_chance:
@@ -283,10 +267,10 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
         historial = "\n".join(CHAT_CONTEXT)
         prompt_sistema = (
             "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
-            "Responde al último mensaje del chat en ESPAÑOL. Sé breve (máx 2 frases). "
-            "Si te insultan, sé cortante. Si hablan de arte, interésate."
+            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
         )
-        prompt_usuario = f"CHAT:\n{historial}\n\nTU RESPUESTA:"
+        prompt_usuario = f"Historial:\n{historial}\n\nMashi:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
@@ -363,7 +347,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi (HF Mode)...")
+    logger.info("Iniciando Mashi (Official Library Mode)...")
     setup_database()
     application = Application.builder().token(TOKEN).build()
     
@@ -376,10 +360,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
-    # 4. Conversación Humana (Antes que la purga)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
-    
-    # 5. Purga de Bots
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
