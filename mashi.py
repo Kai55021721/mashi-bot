@@ -108,18 +108,17 @@ async def ensure_user(user: User):
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
-    """
-    Conecta con la API de Hugging Face con LOGS DETALLADOS.
-    """
     if not HF_API_KEY:
         logger.error("❌ DEBUG: No se encontró HF_API_KEY en el entorno.")
         return None
 
-    # Usamos la URL correcta que nos dieron en el error anterior
-    API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
+    # CAMBIO: Usamos Llama 3 y la URL clásica
+    API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-    full_prompt = f"[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
+    # Llama 3 usa un formato de prompt diferente, pero el texto plano suele funcionar.
+    # Vamos a usar un formato simple que Llama entiende bien.
+    full_prompt = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{prompt_sistema}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{prompt_usuario}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
 
     payload = {
         "inputs": full_prompt,
@@ -135,18 +134,14 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
             logger.info(f"📡 DEBUG: Enviando petición a {API_URL}...")
             response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
             
-            # --- CHIVATO: Imprimir la respuesta exacta ---
             logger.info(f"📥 DEBUG Estado: {response.status_code}")
-            logger.info(f"📦 DEBUG Cuerpo: {response.text}")
-            # -------------------------------------------
-
+            
             if response.status_code != 200:
                 logger.error(f"⛔ DEBUG Error API: {response.status_code} - {response.text}")
                 return None
             
             data = response.json()
             
-            # Intentamos leer el formato estándar
             if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
                 return data[0]["generated_text"].strip()
             elif isinstance(data, dict) and "generated_text" in data:
@@ -158,7 +153,6 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         except Exception as e:
             logger.error(f"💥 DEBUG Excepción: {e}")
             return None
-
 ###############################################################################
 # BLOQUE 5: DECORADORES Y UTILIDADES
 ###############################################################################
