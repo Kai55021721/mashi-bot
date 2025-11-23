@@ -13,7 +13,6 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-# IMPORTANTE: Ya no usamos google.generativeai
 import httpx 
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
@@ -44,7 +43,8 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# USAREMOS LA KEY DE HUGGING FACE
+HF_API_KEY = os.environ.get("HF_API_KEY")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
@@ -104,51 +104,48 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: NUEVA FUNCIÓN DE IA (CONEXIÓN DIRECTA)
+# BLOQUE 4: CEREBRO DE IA (HUGGING FACE)
 ###############################################################################
 
-async def consultar_gemini_directo(prompt_sistema, prompt_usuario=""):
+async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Conecta directamente con la API REST de Google, saltándose la librería problemática.
-    Usa el modelo gemini-1.5-flash que es rápido y gratis.
+    Conecta con la API de Hugging Face usando el modelo Mistral-7B.
     """
-    if not GEMINI_API_KEY:
+    if not HF_API_KEY:
         return None
 
-    # URL Directa a la API v1beta
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
-    headers = {'Content-Type': 'application/json'}
-    
-    # Construimos el cuerpo del mensaje manualmente
+    # Modelo: Mistral-7B-Instruct-v0.2
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+
+    # Mistral usa el formato [INST] ... [/INST]
+    full_prompt = f"[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
+
     payload = {
-        "contents": [{
-            "parts": [{"text": f"{prompt_sistema}\n\n{prompt_usuario}"}]
-        }],
-        "generationConfig": {
-            "temperature": 0.9,
-            "maxOutputTokens": 800
+        "inputs": full_prompt,
+        "parameters": {
+            "max_new_tokens": 250, 
+            "temperature": 0.8,
+            "return_full_text": False
         }
     }
 
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+            response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
             
             if response.status_code != 200:
-                logger.error(f"Error API Google: {response.status_code} - {response.text}")
+                logger.error(f"Error HuggingFace: {response.status_code} - {response.text}")
                 return None
             
             data = response.json()
-            # Extraer el texto de la respuesta JSON compleja de Google
-            if "candidates" in data and len(data["candidates"]) > 0:
-                content = data["candidates"][0]["content"]["parts"][0]["text"]
-                return content
+            if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
+                return data[0]["generated_text"].strip()
             else:
                 return None
                 
         except Exception as e:
-            logger.error(f"Excepción conectando a Gemini Directo: {e}")
+            logger.error(f"Excepción conectando a Hugging Face: {e}")
             return None
 
 
@@ -197,16 +194,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
-    if not GEMINI_API_KEY:
+    if not HF_API_KEY:
         await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
+    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato MUY BREVE (máximo 3 frases) sobre una gloria olvidada de tu pasado."
     
-    # Usamos la nueva función directa
-    respuesta = await consultar_gemini_directo(prompt)
+    respuesta = await consultar_ia(prompt)
     
     if respuesta:
         await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
@@ -256,8 +252,7 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Cerebro Conversacional usando conexión directa """
-    if not GEMINI_API_KEY: return
+    if not HF_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
@@ -278,12 +273,11 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
         prompt_sistema = (
             "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
             "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
-            "Si te insultan, sé cortante. Si hablan de arte, interésate."
+            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
         )
-        prompt_usuario = f"CHAT RECIENTE:\n{historial}\n\nTU RESPUESTA:"
+        prompt_usuario = f"Historial:\n{historial}\n\nMashi:"
         
-        # Usamos la nueva función directa
-        respuesta = await consultar_gemini_directo(prompt_sistema, prompt_usuario)
+        respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
         if respuesta:
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
@@ -358,7 +352,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi (Direct Mode)...")
+    logger.info("Iniciando Mashi (HF Mode)...")
     setup_database()
     application = Application.builder().token(TOKEN).build()
     
@@ -371,9 +365,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
-    # Conversación humana (Debe ir antes de purga de bots)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
-    
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
