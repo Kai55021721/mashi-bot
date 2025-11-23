@@ -43,7 +43,7 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# USAREMOS LA KEY DE HUGGING FACE
+# AHORA USAMOS LA KEY DE HUGGING FACE
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -104,22 +104,23 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (HUGGING FACE) - MODO DEBUG
+# BLOQUE 4: CEREBRO DE IA (HUGGING FACE)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
+    """
+    Conecta con la API de Hugging Face usando el modelo Mistral-7B-Instruct-v0.2.
+    """
     if not HF_API_KEY:
-        logger.error("❌ DEBUG: No se encontró HF_API_KEY en el entorno.")
+        logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
-    # CAMBIO: Usamos Llama 3 y la URL clásica
-    # URL Correcta y Nueva de Hugging Face
-    API_URL = "https://router.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
+    # Usamos la URL de Inferencia clásica para máxima compatibilidad
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-    # Llama 3 usa un formato de prompt diferente, pero el texto plano suele funcionar.
-    # Vamos a usar un formato simple que Llama entiende bien.
-    full_prompt = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{prompt_sistema}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{prompt_usuario}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+    # Formato de prompt específico para Mistral
+    full_prompt = f"<s>[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
 
     payload = {
         "inputs": full_prompt,
@@ -132,28 +133,32 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
 
     async with httpx.AsyncClient() as client:
         try:
-            logger.info(f"📡 DEBUG: Enviando petición a {API_URL}...")
+            # logger.info(f"📡 Enviando petición a HF...") # Descomentar para debug
             response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
             
-            logger.info(f"📥 DEBUG Estado: {response.status_code}")
-            
+            if response.status_code == 503:
+                return "⏳ El oráculo está despertando... (Modelo cargando, intenta en 20s)"
+
             if response.status_code != 200:
-                logger.error(f"⛔ DEBUG Error API: {response.status_code} - {response.text}")
+                logger.error(f"⛔ Error API HF: {response.status_code} - {response.text}")
                 return None
             
             data = response.json()
             
+            # Extracción robusta de la respuesta
             if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
                 return data[0]["generated_text"].strip()
             elif isinstance(data, dict) and "generated_text" in data:
                 return data["generated_text"].strip()
             else:
-                logger.error(f"⚠️ DEBUG Formato desconocido: {data}")
+                logger.error(f"⚠️ Formato desconocido: {data}")
                 return None
                 
         except Exception as e:
-            logger.error(f"💥 DEBUG Excepción: {e}")
+            logger.error(f"💥 Excepción HF: {e}")
             return None
+
+
 ###############################################################################
 # BLOQUE 5: DECORADORES Y UTILIDADES
 ###############################################################################
@@ -205,7 +210,7 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato MUY BREVE (máximo 3 frases) sobre una gloria olvidada de tu pasado."
+    prompt = "Actúa como Mashi, un dios león guardián antiguo. Escribe un micro-relato (3 frases) sobre una gloria olvidada."
     
     respuesta = await consultar_ia(prompt)
     
@@ -269,6 +274,7 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     is_reply = (update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
+    # 5% de probabilidad de respuesta espontánea
     random_chance = random.random() < 0.05
 
     if is_reply or is_mentioned or random_chance:
@@ -277,10 +283,10 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
         historial = "\n".join(CHAT_CONTEXT)
         prompt_sistema = (
             "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
-            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
-            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
+            "Responde al último mensaje del chat en ESPAÑOL. Sé breve (máx 2 frases). "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate."
         )
-        prompt_usuario = f"Historial:\n{historial}\n\nMashi:"
+        prompt_usuario = f"CHAT:\n{historial}\n\nTU RESPUESTA:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
@@ -370,7 +376,10 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
+    # 4. Conversación Humana (Antes que la purga)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
+    
+    # 5. Purga de Bots
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
