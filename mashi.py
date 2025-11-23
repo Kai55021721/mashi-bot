@@ -105,44 +105,42 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (LIBRERÍA OFICIAL)
+# BLOQUE 4: CEREBRO DE IA (LIBRERÍA OFICIAL - CHAT COMPLETION)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Usa el cliente oficial de Hugging Face. Maneja las URLs automáticamente.
+    Usa el cliente oficial con el método chat_completion (más robusto para modelos Instruct).
     """
     if not HF_API_KEY:
         logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
-    # Inicializamos el cliente oficial (Asíncrono)
     client = AsyncInferenceClient(token=HF_API_KEY)
     
-    # Modelo: Mistral v0.2 (Estable)
-    MODELO = "mistralai/Mistral-7B-Instruct-v0.2"
+    # Modelo: Mistral-7B-Instruct-v0.3 (Más nuevo y mejor para chat)
+    MODELO = "mistralai/Mistral-7B-Instruct-v0.3"
 
-    # Formato Mistral
-    full_prompt = f"<s>[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
+    messages = [
+        {"role": "system", "content": prompt_sistema},
+        {"role": "user", "content": prompt_usuario}
+    ]
 
     try:
-        # logger.info("📡 Conectando con Hugging Face Hub...")
-        response = await client.text_generation(
-            full_prompt, 
+        response = await client.chat_completion(
+            messages=messages,
             model=MODELO,
-            max_new_tokens=250,
-            temperature=0.7,
-            return_full_text=False
+            max_tokens=250,
+            temperature=0.7
         )
-        return response.strip()
+        # Extraer el texto de la respuesta de chat
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         logger.error(f"💥 Error en Cliente HF: {e}")
-        # Si el error es de carga (503), avisamos amablemente
         if "503" in str(e) or "loading" in str(e).lower():
-            return "⏳ El oráculo está despertando de su sueño... (Intenta en 30s)"
+            return "⏳ El oráculo está despertando... (Intenta en 30s)"
         return None
-
 
 ###############################################################################
 # BLOQUE 5: DECORADORES Y UTILIDADES
