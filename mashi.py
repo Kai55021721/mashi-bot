@@ -113,7 +113,8 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         return None
 
     # CAMBIO: Usamos Llama 3 y la URL clásica
-    API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
+    # URL Correcta y Nueva de Hugging Face
+    API_URL = "https://router.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
     # Llama 3 usa un formato de prompt diferente, pero el texto plano suele funcionar.
