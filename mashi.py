@@ -115,7 +115,7 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         return None
 
     # Modelo: Mistral-7B-Instruct-v0.2
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+    API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
     # Mistral usa el formato [INST] ... [/INST]
