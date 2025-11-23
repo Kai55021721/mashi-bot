@@ -108,12 +108,15 @@ async def ensure_user(user: User):
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
+    """
+    Conecta con la API de Hugging Face con LOGS DETALLADOS.
+    """
     if not HF_API_KEY:
-        logger.error("❌ Error: No hay HF_API_KEY configurada.")
+        logger.error("❌ DEBUG: No se encontró HF_API_KEY en el entorno.")
         return None
 
-    # Modelo: Mistral-7B-Instruct-v0.2
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+    # Usamos la URL correcta que nos dieron en el error anterior
+    API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
     full_prompt = f"[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
@@ -122,41 +125,39 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         "inputs": full_prompt,
         "parameters": {
             "max_new_tokens": 250, 
-            "temperature": 0.8,
+            "temperature": 0.7,
             "return_full_text": False
         }
     }
 
     async with httpx.AsyncClient() as client:
         try:
-            logger.info(f"📡 Enviando petición a Hugging Face...")
+            logger.info(f"📡 DEBUG: Enviando petición a {API_URL}...")
             response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
             
-            # --- DEBUG: IMPRIMIR RESPUESTA CRUDA ---
-            logger.info(f"📥 Estado HTTP: {response.status_code}")
-            logger.info(f"📦 Respuesta Cruda: {response.text}") 
-            # ---------------------------------------
+            # --- CHIVATO: Imprimir la respuesta exacta ---
+            logger.info(f"📥 DEBUG Estado: {response.status_code}")
+            logger.info(f"📦 DEBUG Cuerpo: {response.text}")
+            # -------------------------------------------
 
             if response.status_code != 200:
-                logger.error(f"⛔ Error API: {response.status_code}")
+                logger.error(f"⛔ DEBUG Error API: {response.status_code} - {response.text}")
                 return None
             
             data = response.json()
             
-            # Verificación de formato estándar de lista
+            # Intentamos leer el formato estándar
             if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
                 return data[0]["generated_text"].strip()
-            # Verificación de formato alternativo (diccionario)
             elif isinstance(data, dict) and "generated_text" in data:
                 return data["generated_text"].strip()
             else:
-                logger.error(f"⚠️ Formato desconocido: {data}")
+                logger.error(f"⚠️ DEBUG Formato desconocido: {data}")
                 return None
                 
         except Exception as e:
-            logger.error(f"💥 Excepción crítica conectando a HF: {e}")
+            logger.error(f"💥 DEBUG Excepción: {e}")
             return None
-
 
 ###############################################################################
 # BLOQUE 5: DECORADORES Y UTILIDADES
