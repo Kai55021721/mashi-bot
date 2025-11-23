@@ -104,21 +104,18 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (HUGGING FACE)
+# BLOQUE 4: CEREBRO DE IA (HUGGING FACE) - MODO DEBUG
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
-    """
-    Conecta con la API de Hugging Face usando el modelo Mistral-7B.
-    """
     if not HF_API_KEY:
+        logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
     # Modelo: Mistral-7B-Instruct-v0.2
-    API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-    # Mistral usa el formato [INST] ... [/INST]
     full_prompt = f"[INST] {prompt_sistema}\n\n{prompt_usuario} [/INST]"
 
     payload = {
@@ -132,20 +129,32 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
 
     async with httpx.AsyncClient() as client:
         try:
+            logger.info(f"📡 Enviando petición a Hugging Face...")
             response = await client.post(API_URL, headers=headers, json=payload, timeout=30.0)
             
+            # --- DEBUG: IMPRIMIR RESPUESTA CRUDA ---
+            logger.info(f"📥 Estado HTTP: {response.status_code}")
+            logger.info(f"📦 Respuesta Cruda: {response.text}") 
+            # ---------------------------------------
+
             if response.status_code != 200:
-                logger.error(f"Error HuggingFace: {response.status_code} - {response.text}")
+                logger.error(f"⛔ Error API: {response.status_code}")
                 return None
             
             data = response.json()
+            
+            # Verificación de formato estándar de lista
             if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
                 return data[0]["generated_text"].strip()
+            # Verificación de formato alternativo (diccionario)
+            elif isinstance(data, dict) and "generated_text" in data:
+                return data["generated_text"].strip()
             else:
+                logger.error(f"⚠️ Formato desconocido: {data}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Excepción conectando a Hugging Face: {e}")
+            logger.error(f"💥 Excepción crítica conectando a HF: {e}")
             return None
 
 
