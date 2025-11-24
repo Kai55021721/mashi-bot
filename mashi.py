@@ -15,7 +15,7 @@ from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, W
 from telegram.constants import ParseMode
 # Importamos la librería de Google
 import google.generativeai as genai
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
 load_dotenv()
@@ -65,7 +65,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 ITCH_URL = "https://kai-shitsumon.itch.io/"
 
-ALLOWED_CHATS = [1890046858, -1001504263227] 
+ALLOWED_CHATS = [1890046858, -1001504263227, 5225682301] 
 
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
@@ -133,7 +133,7 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
     try:
         # Instanciamos el modelo
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.5-flash",
             generation_config=GENERATION_CONFIG,
             # system_instruction permite definir la personalidad de forma nativa
             system_instruction=prompt_sistema
@@ -355,7 +355,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 def main() -> None:
     logger.info("Iniciando Mashi (Gemini Mode)...")
     setup_database()
-    application = Application.builder().token(TOKEN).build()
+    application = ApplicationBuilder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("relato", relato))
@@ -370,7 +370,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
-    application.run_polling()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
