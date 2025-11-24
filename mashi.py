@@ -13,8 +13,8 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-# Usamos la librería oficial de Hugging Face
-from huggingface_hub import AsyncInferenceClient
+# Importamos la librería de Google
+import google.generativeai as genai
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
@@ -44,8 +44,22 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# TOKEN DE HUGGING FACE
-HF_API_KEY = os.environ.get("HF_API_KEY")
+# CONFIGURACIÓN DE GEMINI
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    logger.info("✅ API Key de Gemini cargada correctamente.")
+else:
+    logger.warning("⚠️ No se encontró GEMINI_API_KEY. La IA no funcionará.")
+
+# Configuración del modelo
+GENERATION_CONFIG = {
+    "temperature": 0.9,
+    "top_p": 0.95,
+    "top_k": 64,
+    "max_output_tokens": 8192,
+    "response_mime_type": "text/plain",
+}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
@@ -105,42 +119,35 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (LIBRERÍA OFICIAL - CHAT COMPLETION)
+# BLOQUE 4: CEREBRO DE IA (GOOGLE GEMINI)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Usa el cliente oficial con el método chat_completion (más robusto para modelos Instruct).
+    Conecta con Google Gemini 1.5 Flash.
     """
-    if not HF_API_KEY:
-        logger.error("❌ Error: No hay HF_API_KEY configurada.")
+    if not GEMINI_API_KEY:
+        logger.error("❌ Error: No hay GEMINI_API_KEY configurada.")
         return None
-
-    client = AsyncInferenceClient(token=HF_API_KEY)
-    
-    # Modelo: Mistral-7B-Instruct-v0.3 (Más nuevo y mejor para chat)
-    MODELO = "mistralai/Mistral-7B-Instruct-v0.3"
-
-    messages = [
-        {"role": "system", "content": prompt_sistema},
-        {"role": "user", "content": prompt_usuario}
-    ]
 
     try:
-        response = await client.chat_completion(
-            messages=messages,
-            model=MODELO,
-            max_tokens=250,
-            temperature=0.7
+        # Instanciamos el modelo
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config=GENERATION_CONFIG,
+            # system_instruction permite definir la personalidad de forma nativa
+            system_instruction=prompt_sistema
         )
-        # Extraer el texto de la respuesta de chat
-        return response.choices[0].message.content.strip()
+
+        # Enviamos el mensaje del usuario (puede incluir historial si lo formateamos)
+        response = await model.generate_content_async(prompt_usuario)
+        
+        return response.text.strip()
 
     except Exception as e:
-        logger.error(f"💥 Error en Cliente HF: {e}")
-        if "503" in str(e) or "loading" in str(e).lower():
-            return "⏳ El oráculo está despertando... (Intenta en 30s)"
+        logger.error(f"💥 Error en Gemini: {e}")
         return None
+
 
 ###############################################################################
 # BLOQUE 5: DECORADORES Y UTILIDADES
@@ -187,15 +194,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
-    if not HF_API_KEY:
+    if not GEMINI_API_KEY:
         await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt = "Actúa como Mashi, un dios león guardián antiguo y solemne. Escribe un micro-relato MUY BREVE (máximo 3 frases) sobre una gloria olvidada de tu pasado."
+    prompt_sistema = "Eres Mashi, un dios león guardián antiguo y solemne."
+    prompt_usuario = "Escribe un micro-relato (máximo 3 frases) sobre una gloria olvidada de tu pasado o sobre la naturaleza del tiempo."
     
-    respuesta = await consultar_ia(prompt)
+    respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
     
     if respuesta:
         await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
@@ -245,7 +253,7 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not HF_API_KEY: return
+    if not GEMINI_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
@@ -268,7 +276,7 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
             "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
             "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
         )
-        prompt_usuario = f"Historial:\n{historial}\n\nMashi:"
+        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde como Mashi:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
@@ -345,7 +353,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi (Official Library Mode)...")
+    logger.info("Iniciando Mashi (Gemini Mode)...")
     setup_database()
     application = Application.builder().token(TOKEN).build()
     
