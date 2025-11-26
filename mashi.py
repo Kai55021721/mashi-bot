@@ -13,8 +13,8 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-# Importamos la librería de Google
-import google.generativeai as genai
+# Usamos la librería oficial de Hugging Face
+from huggingface_hub import AsyncInferenceClient
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
@@ -44,22 +44,8 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# CONFIGURACIÓN DE GEMINI
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("✅ API Key de Gemini cargada correctamente.")
-else:
-    logger.warning("⚠️ No se encontró GEMINI_API_KEY. La IA no funcionará.")
-
-# Configuración del modelo
-GENERATION_CONFIG = {
-    "temperature": 0.9,
-    "top_p": 0.95,
-    "top_k": 64,
-    "max_output_tokens": 8192,
-    "response_mime_type": "text/plain",
-}
+# TOKEN DE HUGGING FACE
+HF_API_KEY = os.environ.get("HF_API_KEY")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
@@ -119,33 +105,40 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (GOOGLE GEMINI)
+# BLOQUE 4: CEREBRO DE IA (HUGGING FACE OFICIAL)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Conecta con Google Gemini 1.5 Flash.
+    Usa el cliente oficial de Hugging Face con Chat Completion.
     """
-    if not GEMINI_API_KEY:
-        logger.error("❌ Error: No hay GEMINI_API_KEY configurada.")
+    if not HF_API_KEY:
+        logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
-    try:
-        # Instanciamos el modelo
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config=GENERATION_CONFIG,
-            # system_instruction permite definir la personalidad de forma nativa
-            system_instruction=prompt_sistema
-        )
+    client = AsyncInferenceClient(token=HF_API_KEY)
+    
+    # Modelo: Mistral v0.3 (Probado y funcional)
+    MODELO = "mistralai/Mistral-7B-Instruct-v0.3"
 
-        # Enviamos el mensaje del usuario (puede incluir historial si lo formateamos)
-        response = await model.generate_content_async(prompt_usuario)
-        
-        return response.text.strip()
+    messages = [
+        {"role": "system", "content": prompt_sistema},
+        {"role": "user", "content": prompt_usuario}
+    ]
+
+    try:
+        response = await client.chat_completion(
+            messages=messages,
+            model=MODELO,
+            max_tokens=500,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
-        logger.error(f"💥 Error en Gemini: {e}")
+        logger.error(f"💥 Error en Cliente HF: {e}")
+        if "503" in str(e) or "loading" in str(e).lower():
+            return "⏳ El oráculo está despertando... (Intenta en 30s)"
         return None
 
 
@@ -194,14 +187,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
-    if not GEMINI_API_KEY:
+    if not HF_API_KEY:
         await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt_sistema = "Eres Mashi, un dios león guardián antiguo y solemne."
-    prompt_usuario = "Escribe un micro-relato (máximo 3 frases) sobre una gloria olvidada de tu pasado o sobre la naturaleza del tiempo."
+    prompt_sistema = "Eres Mashi, un dios león guardián antiguo. Tu personalidad es solemne pero cálida."
+    prompt_usuario = "Escribe un micro-relato breve (3-4 líneas) sobre una gloria olvidada de tu pasado."
     
     respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
     
@@ -253,7 +246,7 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GEMINI_API_KEY: return
+    if not HF_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
@@ -272,11 +265,11 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
         
         historial = "\n".join(CHAT_CONTEXT)
         prompt_sistema = (
-            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
-            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
-            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
+            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo. "
+            "Responde brevemente (máx 2 frases) en ESPAÑOL. "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate."
         )
-        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde como Mashi:"
+        prompt_usuario = f"HISTORIAL:\n{historial}\n\nTU RESPUESTA:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
@@ -353,7 +346,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi (Gemini Mode)...")
+    logger.info("Iniciando Mashi (HF Mode)...")
     setup_database()
     application = ApplicationBuilder().token(TOKEN).build()
     
