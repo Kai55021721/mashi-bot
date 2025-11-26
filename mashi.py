@@ -488,7 +488,7 @@ async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await ensure_user(user)
-    nombre_seguro = html.escape(user.first_name or "Mortal")
+    nombre_seguro = str(user.first_name or "Mortal").replace('&', '&').replace('<', '<').replace('>', '>').replace('"', '"')
     texto = (
         f"🛕 <b>Bienvenido al Templo {nombre_seguro}.</b>\n\n"
         "Yo, el Guardián Erudito Caído, custodio este refugio de sabiduría.\n"
