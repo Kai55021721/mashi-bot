@@ -554,17 +554,32 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto += f"{emoji_rep} *Reputación:* {reputacion}/100\n"
 
     # Si es un forward, mostrar origen
-    if target_msg.forward_from:
+    if hasattr(target_msg, 'forward_origin') and target_msg.forward_origin:
+        origin = target_msg.forward_origin
+        if hasattr(origin, 'sender_user') and origin.sender_user:
+            fwd_user = origin.sender_user
+            fwd_edad = estimar_fecha_creacion(fwd_user.id)
+            texto += f"\n🔄 *Mensaje Reenviado de:*\n"
+            texto += f"👤 {fwd_user.first_name}\n"
+            texto += f"🆔 `{fwd_user.id}` | 📅 {fwd_edad}\n"
+        elif hasattr(origin, 'chat') and origin.chat:
+            fwd_chat = origin.chat
+            texto += f"\n🔄 *Mensaje Reenviado de Chat:*\n"
+            texto += f"📢 {fwd_chat.title} (`{fwd_chat.id}`)\n"
+        elif hasattr(origin, 'sender_name') and origin.sender_name:
+            texto += f"\n🔄 *Mensaje Reenviado de:* {origin.sender_name} (oculto)\n"
+    # Fallback API antigua
+    elif hasattr(target_msg, 'forward_from') and target_msg.forward_from:
         fwd_user = target_msg.forward_from
         fwd_edad = estimar_fecha_creacion(fwd_user.id)
         texto += f"\n🔄 *Mensaje Reenviado de:*\n"
-        texto += f"👤 {fwd_user.mention_markdown()}\n"
+        texto += f"👤 {fwd_user.first_name}\n"
         texto += f"🆔 `{fwd_user.id}` | 📅 {fwd_edad}\n"
-    elif target_msg.forward_from_chat:
+    elif hasattr(target_msg, 'forward_from_chat') and target_msg.forward_from_chat:
         fwd_chat = target_msg.forward_from_chat
         texto += f"\n🔄 *Mensaje Reenviado de Chat:*\n"
         texto += f"📢 {fwd_chat.title} (`{fwd_chat.id}`)\n"
-    elif target_msg.forward_sender_name:
+    elif hasattr(target_msg, 'forward_sender_name') and target_msg.forward_sender_name:
         texto += f"\n🔄 *Mensaje Reenviado de:* {target_msg.forward_sender_name} (oculto)\n"
 
     await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
@@ -756,16 +771,30 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Detección de reenvíos
     forward_info = ""
-    if update.message.forward_from:
+    if hasattr(update.message, 'forward_origin') and update.message.forward_origin:
+        origin = update.message.forward_origin
+        if hasattr(origin, 'sender_user') and origin.sender_user:
+            fwd_user = origin.sender_user
+            fwd_rep = get_user_reputation(fwd_user.id)
+            fwd_reputacion = fwd_rep["reputation"] if fwd_rep else 50
+            fwd_edad = estimar_fecha_creacion(fwd_user.id)
+            forward_info = f"El mensaje es un reenvío de {fwd_user.first_name} (ID: {fwd_user.id}, Edad: {fwd_edad}, Reputación: {fwd_reputacion}/100)."
+        elif hasattr(origin, 'chat') and origin.chat:
+            fwd_chat = origin.chat
+            forward_info = f"El mensaje es un reenvío del chat '{fwd_chat.title}' (ID: {fwd_chat.id})."
+        elif hasattr(origin, 'sender_name') and origin.sender_name:
+            forward_info = f"El mensaje es un reenvío de '{origin.sender_name}' (usuario oculto)."
+    # Fallback para API antigua (si existe)
+    elif hasattr(update.message, 'forward_from') and update.message.forward_from:
         fwd_user = update.message.forward_from
         fwd_rep = get_user_reputation(fwd_user.id)
         fwd_reputacion = fwd_rep["reputation"] if fwd_rep else 50
         fwd_edad = estimar_fecha_creacion(fwd_user.id)
         forward_info = f"El mensaje es un reenvío de {fwd_user.first_name} (ID: {fwd_user.id}, Edad: {fwd_edad}, Reputación: {fwd_reputacion}/100)."
-    elif update.message.forward_from_chat:
+    elif hasattr(update.message, 'forward_from_chat') and update.message.forward_from_chat:
         fwd_chat = update.message.forward_from_chat
         forward_info = f"El mensaje es un reenvío del chat '{fwd_chat.title}' (ID: {fwd_chat.id})."
-    elif update.message.forward_sender_name:
+    elif hasattr(update.message, 'forward_sender_name') and update.message.forward_sender_name:
         forward_info = f"El mensaje es un reenvío de '{update.message.forward_sender_name}' (usuario oculto)."
     
     # Identificar si el usuario es Kai (el padre de Mashi)
