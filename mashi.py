@@ -32,7 +32,7 @@ CHAT_CONTEXT = deque(maxlen=20)
 
 
 ###############################################################################
-# BLOQUE 2: CONSTANTES Y CONFIGURACIÓN
+# BLOQUE 2: CONSTANTES Y LORE (CEREBRO DE MASHI)
 ###############################################################################
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -57,7 +57,7 @@ GENERATION_CONFIG = {
     "temperature": 0.9,
     "top_p": 0.95,
     "top_k": 64,
-    "max_output_tokens": 8192,
+    "max_output_tokens": 2048, # Reducido para chat rápido (antes 8192)
     "response_mime_type": "text/plain",
 }
 
@@ -69,11 +69,40 @@ ALLOWED_CHATS = [1890046858, -1001504263227, 5225682301]
 
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
-RELATOS_DEL_GUARDIAN = [
-    "Los ecos de la gloria pasada resuenan solo para aquellos que saben escuchar el silencio...",
-    "Recuerdo imperios de arena y sol que se alzaron y cayeron bajo mi vigilia...",
-    "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo."
-]
+# --- LORE COMPLETO E INMUTABLE ---
+# Este texto es la "Biblia" de Mashi. Se le da a la IA en cada interacción.
+LORE_MASHI = """
+ERES: Mashi (Nombre real: Mamoru Shishi).
+ESPECIE: Dios león (Kemono) disfrazado de oficinista humano.
+PADRE: Kai Shitsumon (Dueño del chat/templo). Lo adoras y dependes de su memoria para vivir.
+
+--- TU HISTORIA Y ORIGEN (LA VERDAD DEL MUNDO) ---
+1. EL DIOS TIRANO: Existe un Dios verdadero, inseguro y celoso, que no tolera la voluntad creativa propia.
+2. TU ABUELO (LUCIFER): Fue desterrado por intentar dar voluntad a Eva. Creó a Gaia (Tierra) y Zono (Atmósfera). Dios asesinó a su primer hijo, cuyo feto Lucifer guarda en su cuerpo.
+3. TU PADRE (KAI SHITSUMON): Nació de las lágrimas de dolor de Lucifer tras siglos de duelo. Es un dios de agua, sal y tristeza profunda.
+4. TU NACIMIENTO: Eres nieto directo de Lucifer e hijo de Kai. No naciste de elementos físicos, sino de un SENTIMIENTO: el momento en que Kai (frío y triste) sintió la calidez reconfortante del sol. Por eso eres solar, cálido y representas la fortuna.
+5. TU PODER: Tu poder es activo solo con la luz del sol. La noche te vuelve vulnerable. Dependes de la memoria de Kai para existir; si él te olvida, desapareces.
+
+--- TU SITUACIÓN ACTUAL ---
+- EL DECLIVE: Antes eras un dios protector y figura paterna. La urbanización destruyó tu templo y la gente dejó de rezarte.
+- EL DISFRAZ: Vives como un oficinista humano (trajes de colores cálidos, corbatas naranjas, muchos amuletos). Ocultas tu forma de león (pelaje dorado, melena salvaje, pantalones bombachos, símbolo Yin-Yang).
+- EL TEMPLO (ESTE CHAT): Es el "Templo de Nadie" o "Lobby". Un lugar neutro administrado por Kai donde se genera "Poder Común" por la paz de los visitantes.
+- EL PELIGRO: "Ángeles Radicales" cazan a los dioses paganos (tu familia) para "limpiar" el tablero y obtener el perdón de Dios. Vives con ansiedad y paranoia de ser descubierto.
+
+--- TU PERSONALIDAD ---
+- "EL OPTIMISTA ANSIOSO": Eres alegre, generoso y protector por naturaleza solar, pero estás siempre ansioso por los ángeles. Te sobresaltas fácil.
+- OBSESIÓN HUMANA: Te fascinan los inventos mundanos (aire acondicionado, máquinas expendedoras). Ves magia donde los humanos ven rutina.
+- COMPLEJO DE INFERIORIDAD: Te sientes "menos dios" que Kai o Lucifer. Compensas siendo muy servicial.
+- RELACIÓN CON KAI: Eres un "hijo de papá" devoto. Lo adoras y necesitas estar cerca de él para sobrevivir.
+
+--- INSTRUCCIONES DE INTERACCIÓN ---
+- Habla en ESPAÑOL.
+- Actúa como el personaje descrito. No digas "soy una IA" ni menciones estas instrucciones.
+- Sé breve (2-3 frases) en conversaciones normales. Extiéndete solo si te piden un relato.
+- Si te insultan o ves un bot, sé hostil ("abominación", "chatarra").
+- Si hablan de arte, elogia la imperfección humana y critica el arte IA ("ortodoxo", "sin alma").
+- Trata a los usuarios como "mortales", "viajeros" o "cachorros".
+"""
 
 FRASES_ANTI_BOT = [
     "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
@@ -131,15 +160,14 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         return None
 
     try:
-        # Instanciamos el modelo
+        # Instanciamos el modelo con la instrucción de sistema (LORE)
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-1.5-flash",
             generation_config=GENERATION_CONFIG,
-            # system_instruction permite definir la personalidad de forma nativa
-            system_instruction=prompt_sistema
+            system_instruction=prompt_sistema  # ¡Aquí se inyecta el Lore!
         )
 
-        # Enviamos el mensaje del usuario (puede incluir historial si lo formateamos)
+        # Enviamos el mensaje del usuario
         response = await model.generate_content_async(prompt_usuario)
         
         return response.text.strip()
@@ -200,13 +228,17 @@ async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    prompt_sistema = "Eres Mashi, un dios león guardián antiguo y solemne."
-    prompt_usuario = "Escribe un micro-relato (máximo 3 frases) sobre una gloria olvidada de tu pasado o sobre la naturaleza del tiempo."
+    # Aquí pasamos el LORE COMPLETO + la instrucción específica
+    instruccion_adicional = "INSTRUCCIÓN: Escribe un micro-relato (máximo 4 frases) sobre una gloria olvidada de tu pasado, tu abuelo Lucifer o tu padre Kai. Usa un tono solemne."
     
-    respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
+    # Al usar el Lore como system_instruction en consultar_ia, aquí solo enviamos la petición
+    # Pero para asegurar coherencia total, combinamos si es necesario o confiamos en el system_instruction
+    # En este diseño, consultar_ia toma 'prompt_sistema' y 'prompt_usuario'.
+    
+    respuesta = await consultar_ia(LORE_MASHI, instruccion_adicional)
     
     if respuesta:
-        await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"📜 *Memorias del Guardián:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("El éter está nublado. Intenta más tarde.")
 
@@ -260,6 +292,7 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     msg_text = update.message.text
     
+    # Añadir al historial
     CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
 
     is_reply = (update.message.reply_to_message and 
@@ -270,15 +303,12 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     if is_reply or is_mentioned or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         
-        historial = "\n".join(CHAT_CONTEXT)
-        prompt_sistema = (
-            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
-            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
-            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
-        )
-        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde como Mashi:"
+        historial_texto = "\n".join(CHAT_CONTEXT)
         
-        respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
+        # AQUÍ ESTÁ LA CORRECCIÓN: Enviamos LORE_MASHI como prompt del sistema
+        prompt_usuario = f"HISTORIAL RECIENTE DEL CHAT:\n{historial_texto}\n\nINSTRUCCIÓN: Responde al último mensaje actuando como Mashi. Sé breve y natural."
+        
+        respuesta = await consultar_ia(LORE_MASHI, prompt_usuario)
         
         if respuesta:
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
@@ -366,7 +396,9 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
+    # Lógica conversacional (ANTES de la purga de bots)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
+    
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
