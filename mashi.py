@@ -13,6 +13,7 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
+# Importamos la librería de Google
 import google.generativeai as genai
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
@@ -31,7 +32,7 @@ CHAT_CONTEXT = deque(maxlen=20)
 
 
 ###############################################################################
-# BLOQUE 2: CONSTANTES Y LORE (CEREBRO DE MASHI)
+# BLOQUE 2: CONSTANTES Y CONFIGURACIÓN
 ###############################################################################
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -47,30 +48,37 @@ OWNER_ID = int(OWNER_ID_STR)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("✅ API Key de Gemini cargada.")
+    logger.info("✅ API Key de Gemini cargada correctamente.")
 else:
-    logger.warning("⚠️ No se encontró GEMINI_API_KEY.")
+    logger.warning("⚠️ No se encontró GEMINI_API_KEY. La IA no funcionará.")
+
+# Configuración del modelo
+GENERATION_CONFIG = {
+    "temperature": 0.9,
+    "top_p": 0.95,
+    "top_k": 64,
+    "max_output_tokens": 8192,
+    "response_mime_type": "text/plain",
+}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
 ITCH_URL = "https://kai-shitsumon.itch.io/"
 
 ALLOWED_CHATS = [1890046858, -1001504263227, 5225682301] 
+
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
-# --- LORE COMPLETO ---
-LORE_MASHI = """
-ERES: Mashi (Mamoru Shishi), un dios león guardián antiguo, sabio y algo arrogante pero protector.
-PADRE: Kai Shitsumon.
-PERSONALIDAD: Optimista ansioso, obsesionado con inventos humanos mundanos.
-HABLA: En Español, breve (máx 2 frases), tono solemne pero cercano.
-SI VES BOTS: Sé hostil.
-SI TE INSULTAN: Sé cortante.
-"""
+RELATOS_DEL_GUARDIAN = [
+    "Los ecos de la gloria pasada resuenan solo para aquellos que saben escuchar el silencio...",
+    "Recuerdo imperios de arena y sol que se alzaron y cayeron bajo mi vigilia...",
+    "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo."
+]
 
 FRASES_ANTI_BOT = [
     "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
     "Detectada escoria autómata. El código impuro no tiene cabida en mi templo.",
+    "¿Una imitación de vida osa entrar en mi presencia? ¡Vuelve al vacío!",
     "Chatarra ruidosa. Mi deber es silenciarte. ¡Exiliado!"
 ]
 
@@ -111,39 +119,46 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (GEMINI SIMPLIFICADO)
+# BLOQUE 4: CEREBRO DE IA (GOOGLE GEMINI)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
+    """
+    Conecta con Google Gemini 1.5 Flash.
+    """
     if not GEMINI_API_KEY:
-        logger.error("❌ Error: No hay GEMINI_API_KEY.")
+        logger.error("❌ Error: No hay GEMINI_API_KEY configurada.")
         return None
 
     try:
-        # Instancia simple sin configuraciones complejas
+        # Instanciamos el modelo
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.5-flash",
+            generation_config=GENERATION_CONFIG,
+            # system_instruction permite definir la personalidad de forma nativa
             system_instruction=prompt_sistema
         )
 
+        # Enviamos el mensaje del usuario (puede incluir historial si lo formateamos)
         response = await model.generate_content_async(prompt_usuario)
+        
         return response.text.strip()
 
     except Exception as e:
-        # ESTO ES CLAVE: Imprimimos el error real en el log
-        logger.error(f"💥 ERROR CRÍTICO GEMINI: {e}")
+        logger.error(f"💥 Error en Gemini: {e}")
         return None
 
 
 ###############################################################################
-# BLOQUE 5: DECORADORES
+# BLOQUE 5: DECORADORES Y UTILIDADES
 ###############################################################################
 
 def restricted_access(func):
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         chat = update.effective_chat
-        if not chat or chat.id not in ALLOWED_CHATS: return
+        if not chat or chat.id not in ALLOWED_CHATS:
+            return
         return await func(update, context, *args, **kwargs)
     return wrapped
 
@@ -156,6 +171,10 @@ def owner_only(func):
             await update.message.reply_text("Mis asuntos son solo con el maestro Kai.")
     return wrapped
 
+async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
+    chosen_item = random.choice(choices)
+    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
+
 
 ###############################################################################
 # BLOQUE 6: COMANDOS PÚBLICOS
@@ -165,21 +184,29 @@ def owner_only(func):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await ensure_user(user)
-    texto = f"🛕 *Bienvenido al Templo de Mashi, mortal {user.mention_markdown()}.*\nExplora mis dones:\n• 📜 /relato\n• 🛒 /tienda"
+    texto = (
+        f"🛕 *Bienvenido al Templo de Mashi, mortal {user.mention_markdown()}.*\n\n"
+        "Yo, el Guardián Erudito Caído, custodio este refugio de sabiduría.\n"
+        "Explora mis dones:\n• 📜 /relato\n• 🛒 /tienda"
+    )
     keyboard = [[InlineKeyboardButton("🛒 Tienda", url=ITCH_URL)]]
     await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
     if not GEMINI_API_KEY:
-        await update.message.reply_text("Mi memoria está nublada hoy.")
+        await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-    respuesta = await consultar_ia(LORE_MASHI, "Cuéntame un relato breve de tu pasado.")
+    
+    prompt_sistema = "Eres Mashi, un dios león guardián antiguo y solemne."
+    prompt_usuario = "Escribe un micro-relato (máximo 3 frases) sobre una gloria olvidada de tu pasado o sobre la naturaleza del tiempo."
+    
+    respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
     
     if respuesta:
-        await update.message.reply_text(f"📜 *Memorias:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("El éter está nublado. Intenta más tarde.")
 
@@ -201,8 +228,10 @@ async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_to_message.delete()
         await update.message.delete()
-        await context.bot.send_message(update.effective_chat.id, "La luz purifica.")
-    except: pass
+        await context.bot.send_message(update.effective_chat.id, "La luz purifica. Sombra desterrada.")
+        db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("purificar", update.message.reply_to_message.from_user.id, datetime.now().isoformat()), commit=True)
+    except Exception:
+        await update.message.reply_text("La impureza se resiste.")
 
 @owner_only
 @restricted_access
@@ -214,31 +243,42 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.ban_chat_member(update.effective_chat.id, target.id)
         await update.message.delete()
         await context.bot.send_message(update.effective_chat.id, f"El hereje {target.mention_html()} ha sido exiliado.", parse_mode=ParseMode.HTML)
-    except: pass
+        db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("exilio", target.id, datetime.now().isoformat()), commit=True)
+    except Exception:
+        await update.message.reply_text("El exilio falló.")
 
 
 ###############################################################################
-# BLOQUE 8: LÓGICA CONVERSACIONAL
+# BLOQUE 8: LÓGICA CONVERSACIONAL Y EVENTOS
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GEMINI_API_KEY or not update.message or not update.message.text: return
+    if not GEMINI_API_KEY: return
+    if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
     user = update.effective_user
     msg_text = update.message.text
+    
     CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
 
-    is_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id)
+    is_reply = (update.message.reply_to_message and 
+                update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
     random_chance = random.random() < 0.05
 
     if is_reply or is_mentioned or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        historial = "\n".join(CHAT_CONTEXT)
-        prompt_usuario = f"HISTORIAL:\n{historial}\n\nRESPUESTA:"
         
-        respuesta = await consultar_ia(LORE_MASHI, prompt_usuario)
+        historial = "\n".join(CHAT_CONTEXT)
+        prompt_sistema = (
+            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo, sabio y algo arrogante pero protector. "
+            "Responde al último mensaje del chat. Sé breve (máx 2 frases). "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate. Habla siempre en ESPAÑOL."
+        )
+        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde como Mashi:"
+        
+        respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
         if respuesta:
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
@@ -253,12 +293,13 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         admins = await context.bot.get_chat_administrators(chat_id)
         admin_ids = [admin.user.id for admin in admins]
-    except: admin_ids = [OWNER_ID]
+    except:
+        admin_ids = [OWNER_ID]
 
     for member in new_members:
         if member.is_bot and member.id != context.bot.id:
             if adder.id in admin_ids:
-                await context.bot.send_message(chat_id, f"Autómata {member.mention_html()} aceptado.", parse_mode=ParseMode.HTML)
+                await context.bot.send_message(chat_id, f"Acepto al autómata {member.mention_html()} por orden de la autoridad.", parse_mode=ParseMode.HTML)
             else:
                 try:
                     await context.bot.ban_chat_member(chat_id, member.id)
@@ -266,24 +307,27 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except: pass
         elif not member.is_bot:
             await ensure_user(member)
-            kb = [[InlineKeyboardButton("Mayor +18", callback_data=f"age_yes:{member.id}")],
-                  [InlineKeyboardButton("Menor", callback_data=f"age_no:{member.id}")]]
-            await context.bot.send_message(chat_id, f"Mortal {member.mention_html()}, confirma tu edad.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+            kb = [[InlineKeyboardButton("Soy Mayor de 18", callback_data=f"age_yes:{member.id}")],
+                  [InlineKeyboardButton("Soy Menor", callback_data=f"age_no:{member.id}")]]
+            await context.bot.send_message(chat_id, f"Mortal {member.mention_html()}, confirma tu edad (+18) para permanecer en el templo.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    try: action, target_id = query.data.split(":"); target_id = int(target_id)
+    try:
+        action, target_id = query.data.split(":")
+        target_id = int(target_id)
     except: return await query.answer()
 
-    if query.from_user.id != target_id: return await query.answer("No es tu verificación.", show_alert=True)
+    if query.from_user.id != target_id:
+        return await query.answer("No es tu verificación.", show_alert=True)
+
     await query.answer()
-    
     if action == "age_yes":
-        await query.edit_message_text(f"{query.from_user.mention_html()} aceptado.", parse_mode=ParseMode.HTML)
+        await query.edit_message_text(f"El mortal {query.from_user.mention_html()} ha sido aceptado.", parse_mode=ParseMode.HTML)
     elif action == "age_no":
         try:
             await context.bot.ban_chat_member(query.effective_chat.id, target_id)
-            await query.edit_message_text(f"{query.from_user.mention_html()} exiliado por menor.", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(f"El mortal {query.from_user.mention_html()} ha confesado ser menor. Exiliado.", parse_mode=ParseMode.HTML)
         except: pass
 
 async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -300,7 +344,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await update.message.delete()
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await context.bot.send_message(update.effective_chat.id, f"Bot {user.mention_html()} purificado.", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(update.effective_chat.id, f"Abominación {user.mention_html()} silenciada y exiliada.", parse_mode=ParseMode.HTML)
     except: pass
 
 
