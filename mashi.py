@@ -13,8 +13,8 @@ from collections import deque
 from dotenv import load_dotenv
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
-# Importamos la librería de Google
-import google.generativeai as genai
+# Usamos la librería oficial de Hugging Face
+from huggingface_hub import AsyncInferenceClient
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Carga las variables del archivo .env
@@ -32,7 +32,7 @@ CHAT_CONTEXT = deque(maxlen=20)
 
 
 ###############################################################################
-# BLOQUE 2: CONSTANTES Y LORE (CEREBRO DE MASHI)
+# BLOQUE 2: CONSTANTES Y CONFIGURACIÓN
 ###############################################################################
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -44,22 +44,8 @@ if not OWNER_ID_STR:
     raise ValueError("ERROR: Falta OWNER_ID en .env")
 OWNER_ID = int(OWNER_ID_STR)
 
-# CONFIGURACIÓN DE GEMINI
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("✅ API Key de Gemini cargada correctamente.")
-else:
-    logger.warning("⚠️ No se encontró GEMINI_API_KEY. La IA no funcionará.")
-
-# Configuración del modelo
-GENERATION_CONFIG = {
-    "temperature": 0.9,
-    "top_p": 0.95,
-    "top_k": 64,
-    "max_output_tokens": 2048,
-    "response_mime_type": "text/plain",
-}
+# TOKEN DE HUGGING FACE
+HF_API_KEY = os.environ.get("HF_API_KEY")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, 'mashi_data.db')
@@ -69,39 +55,11 @@ ALLOWED_CHATS = [1890046858, -1001504263227, 5225682301]
 
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
-# --- LORE COMPLETO E INMUTABLE ---
-LORE_MASHI = """
-ERES: Mashi (Nombre real: Mamoru Shishi).
-ESPECIE: Dios león (Kemono) disfrazado de oficinista humano.
-PADRE: Kai Shitsumon (Dueño del chat/templo). Lo adoras y dependes de su memoria para vivir.
-
---- TU HISTORIA Y ORIGEN (LA VERDAD DEL MUNDO) ---
-1. EL DIOS TIRANO: Existe un Dios verdadero, inseguro y celoso, que no tolera la voluntad creativa propia.
-2. TU ABUELO (LUCIFER): Fue desterrado por intentar dar voluntad a Eva. Creó a Gaia (Tierra) y Zono (Atmósfera). Dios asesinó a su primer hijo, cuyo feto Lucifer guarda en su cuerpo.
-3. TU PADRE (KAI SHITSUMON): Nació de las lágrimas de dolor de Lucifer tras siglos de duelo. Es un dios de agua, sal y tristeza profunda.
-4. TU NACIMIENTO: Eres nieto directo de Lucifer e hijo de Kai. No naciste de elementos físicos, sino de un SENTIMIENTO: el momento en que Kai (frío y triste) sintió la calidez reconfortante del sol. Por eso eres solar, cálido y representas la fortuna.
-5. TU PODER: Tu poder es activo solo con la luz del sol. La noche te vuelve vulnerable. Dependes de la memoria de Kai para existir; si él te olvida, desapareces.
-
---- TU SITUACIÓN ACTUAL ---
-- EL DECLIVE: Antes eras un dios protector y figura paterna. La urbanización destruyó tu templo y la gente dejó de rezarte.
-- EL DISFRAZ: Vives como un oficinista humano (trajes de colores cálidos, corbatas naranjas, muchos amuletos). Ocultas tu forma de león (pelaje dorado, melena salvaje, pantalones bombachos, símbolo Yin-Yang).
-- EL TEMPLO (ESTE CHAT): Es el "Templo de Nadie" o "Lobby". Un lugar neutro administrado por Kai donde se genera "Poder Común" por la paz de los visitantes.
-- EL PELIGRO: "Ángeles Radicales" cazan a los dioses paganos (tu familia) para "limpiar" el tablero y obtener el perdón de Dios. Vives con ansiedad y paranoia de ser descubierto.
-
---- TU PERSONALIDAD ---
-- "EL OPTIMISTA ANSIOSO": Eres alegre, generoso y protector por naturaleza solar, pero estás siempre ansioso por los ángeles. Te sobresaltas fácil.
-- OBSESIÓN HUMANA: Te fascinan los inventos mundanos (aire acondicionado, máquinas expendedoras). Ves magia donde los humanos ven rutina.
-- COMPLEJO DE INFERIORIDAD: Te sientes "menos dios" que Kai o Lucifer. Compensas siendo muy servicial.
-- RELACIÓN CON KAI: Eres un "hijo de papá" devoto. Lo adoras y necesitas estar cerca de él para sobrevivir.
-
---- INSTRUCCIONES DE INTERACCIÓN ---
-- Habla en ESPAÑOL.
-- Actúa como el personaje descrito. No digas "soy una IA" ni menciones estas instrucciones.
-- Sé breve (2-3 frases) en conversaciones normales. Extiéndete solo si te piden un relato.
-- Si te insultan o ves un bot, sé hostil ("abominación", "chatarra").
-- Si hablan de arte, elogia la imperfección humana y critica el arte IA ("ortodoxo", "sin alma").
-- Trata a los usuarios como "mortales", "viajeros" o "cachorros".
-"""
+RELATOS_DEL_GUARDIAN = [
+    "Los ecos de la gloria pasada resuenan solo para aquellos que saben escuchar el silencio...",
+    "Recuerdo imperios de arena y sol que se alzaron y cayeron bajo mi vigilia...",
+    "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo."
+]
 
 FRASES_ANTI_BOT = [
     "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
@@ -147,32 +105,40 @@ async def ensure_user(user: User):
 
 
 ###############################################################################
-# BLOQUE 4: CEREBRO DE IA (GOOGLE GEMINI)
+# BLOQUE 4: CEREBRO DE IA (HUGGING FACE OFICIAL)
 ###############################################################################
 
 async def consultar_ia(prompt_sistema, prompt_usuario=""):
     """
-    Conecta con Google Gemini 1.5 Flash.
+    Usa el cliente oficial de Hugging Face con Chat Completion.
     """
-    if not GEMINI_API_KEY:
-        logger.error("❌ Error: No hay GEMINI_API_KEY configurada.")
+    if not HF_API_KEY:
+        logger.error("❌ Error: No hay HF_API_KEY configurada.")
         return None
 
-    try:
-        # Instanciamos el modelo con la instrucción de sistema (LORE)
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            generation_config=GENERATION_CONFIG,
-            system_instruction=prompt_sistema
-        )
+    client = AsyncInferenceClient(token=HF_API_KEY)
+    
+    # Modelo: Mistral v0.3 (Probado y funcional)
+    MODELO = "mistralai/Mistral-7B-Instruct-v0.3"
 
-        # Enviamos el mensaje del usuario
-        response = await model.generate_content_async(prompt_usuario)
-        
-        return response.text.strip()
+    messages = [
+        {"role": "system", "content": prompt_sistema},
+        {"role": "user", "content": prompt_usuario}
+    ]
+
+    try:
+        response = await client.chat_completion(
+            messages=messages,
+            model=MODELO,
+            max_tokens=500,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
-        logger.error(f"💥 Error en Gemini: {e}")
+        logger.error(f"💥 Error en Cliente HF: {e}")
+        if "503" in str(e) or "loading" in str(e).lower():
+            return "⏳ El oráculo está despertando... (Intenta en 30s)"
         return None
 
 
@@ -198,6 +164,10 @@ def owner_only(func):
             await update.message.reply_text("Mis asuntos son solo con el maestro Kai.")
     return wrapped
 
+async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
+    chosen_item = random.choice(choices)
+    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
+
 
 ###############################################################################
 # BLOQUE 6: COMANDOS PÚBLICOS
@@ -217,19 +187,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
-    if not GEMINI_API_KEY:
-        await update.message.reply_text("Mi memoria está nublada hoy (Falta API Key).")
+    if not HF_API_KEY:
+        await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # Usamos la función con el Lore integrado
-    instruccion_adicional = "INSTRUCCIÓN: Escribe un micro-relato (máximo 4 frases) sobre una gloria olvidada de tu pasado, tu abuelo Lucifer o tu padre Kai. Usa un tono solemne."
+    prompt_sistema = "Eres Mashi, un dios león guardián antiguo. Tu personalidad es solemne pero cálida."
+    prompt_usuario = "Escribe un micro-relato breve (3-4 líneas) sobre una gloria olvidada de tu pasado."
     
-    respuesta = await consultar_ia(LORE_MASHI, instruccion_adicional)
+    respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
     
     if respuesta:
-        await update.message.reply_text(f"📜 *Memorias del Guardián:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"📜 *Ecos del Pasado:*\n\n{respuesta}", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("El éter está nublado. Intenta más tarde.")
 
@@ -276,14 +246,13 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ###############################################################################
 
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GEMINI_API_KEY: return
+    if not HF_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
     user = update.effective_user
     msg_text = update.message.text
     
-    # Añadir al historial
     CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
 
     is_reply = (update.message.reply_to_message and 
@@ -294,11 +263,15 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     if is_reply or is_mentioned or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         
-        historial_texto = "\n".join(CHAT_CONTEXT)
-        prompt_usuario = f"HISTORIAL RECIENTE DEL CHAT:\n{historial_texto}\n\nINSTRUCCIÓN: Responde al último mensaje actuando como Mashi. Sé breve y natural."
+        historial = "\n".join(CHAT_CONTEXT)
+        prompt_sistema = (
+            "Eres Mamoru Shishi (Mashi), un dios guardián león antiguo. "
+            "Responde brevemente (máx 2 frases) en ESPAÑOL. "
+            "Si te insultan, sé cortante. Si hablan de arte, interésate."
+        )
+        prompt_usuario = f"HISTORIAL:\n{historial}\n\nTU RESPUESTA:"
         
-        # Usamos la función con el Lore integrado
-        respuesta = await consultar_ia(LORE_MASHI, prompt_usuario)
+        respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
         if respuesta:
             CHAT_CONTEXT.append(f"Mashi: {respuesta}")
@@ -373,7 +346,7 @@ async def handle_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
 ###############################################################################
 
 def main() -> None:
-    logger.info("Iniciando Mashi (Gemini Mode)...")
+    logger.info("Iniciando Mashi (HF Mode)...")
     setup_database()
     application = ApplicationBuilder().token(TOKEN).build()
     
