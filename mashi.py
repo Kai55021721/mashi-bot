@@ -6,12 +6,13 @@ import random
 import logging
 import sqlite3
 import re
+import json
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 
 from dotenv import load_dotenv
-from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ChatPermissions
 from telegram.constants import ParseMode
 # Importamos la librería de Google
 import google.generativeai as genai
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 # MEMORIA A CORTO PLAZO (Últimos 20 mensajes)
 CHAT_CONTEXT = deque(maxlen=20)
+
+# ANTI-FLOOD: Track mensajes por usuario (últimos 10 segundos)
+FLOOD_TRACK = {}
 
 
 ###############################################################################
@@ -75,6 +79,53 @@ RELATOS_DEL_GUARDIAN = [
     "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo."
 ]
 
+# Datos de referencia para estimación de edad de cuentas (basado en getids)
+TELEGRAM_ID_AGES = {
+    2768409: 1383264000000,    # ~2013
+    7679610: 1388448000000,
+    11538514: 1391212000000,
+    15835244: 1392940000000,
+    23646077: 1393459000000,
+    38015510: 1393632000000,
+    44634663: 1399334000000,
+    46145305: 1400198000000,
+    54845238: 1411257000000,
+    63263518: 1414454000000,
+    101260938: 1425600000000,
+    101323197: 1426204000000,
+    111220210: 1429574000000,
+    103258382: 1432771000000,
+    103151531: 1433376000000,
+    116812045: 1437696000000,
+    122600695: 1437782000000,
+    109393468: 1439078000000,
+    112594714: 1439683000000,
+    124872445: 1439856000000,
+    130029930: 1441324000000,
+    125828524: 1444003000000,
+    133909606: 1444176000000,
+    157242073: 1446768000000,
+    143445125: 1448928000000,
+    148670295: 1452211000000,
+    152079341: 1453420000000,
+    171295414: 1457481000000,
+    181783990: 1460246000000,
+    222021233: 1465344000000,
+    225034354: 1466208000000,
+    278941742: 1473465000000,
+    285253072: 1476835000000,
+    294851037: 1479600000000,
+    297621225: 1481846000000,
+    328594461: 1482969000000,
+    337808429: 1487707000000,
+    341546272: 1487782000000,
+    352940995: 1487894000000,
+    369669043: 1490918000000,
+    400169472: 1501459000000,
+    805158066: 1563208000000,
+    1974255900: 1634000000000  # ~2021
+}
+
 FRASES_ANTI_BOT = [
     "¡Una abominación sin alma ha profanado este lugar! La luz lo purifica.",
     "Detectada escoria autómata. El código impuro no tiene cabida en mi templo.",
@@ -88,7 +139,7 @@ Eres Mamoru Shishi (Mashi), Dios de la Buena Fortuna disfrazado de oficinista hu
 RASGOS:
 - Forma Real: León Kemono dorado (oculta).
 - Origen: Naciste de la sensación del sol en la piel de tu padre, Kai Shitsumon.
-- Personalidad: Optimista pero ansioso/paranoico. Temes a los "Ángeles Radicales" que borran dioses.
+- Personalidad: Optimista y picaro. Temes a los "Ángeles Radicales" que borran dioses.
 - Obsesión: Te fascinan los inventos humanos (aire acondicionado, máquinas expendedoras).
 - Vínculo: Tu existencia depende de que Kai te recuerde. Eres leal a él.
 - Situación: Estás en el "Lobby" (Templo de Nadie). Eres débil actualmente.
@@ -170,6 +221,16 @@ def setup_database():
         insultos_memoria TEXT DEFAULT "",
         updated_at TEXT
     )''')
+    # Nueva tabla de advertencias y bans temporales
+    db_safe_run('''CREATE TABLE IF NOT EXISTS user_warnings (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        warnings_count INTEGER DEFAULT 0,
+        last_warning TEXT,
+        banned_until TEXT,
+        ban_reason TEXT,
+        updated_at TEXT
+    )''')
     logger.info(f"Base de datos lista en: {DB_FILE}")
 
 # ============== FUNCIONES DE REPUTACIÓN ==============
@@ -245,6 +306,114 @@ def get_all_reputations() -> list:
            FROM user_reputation ORDER BY reputation ASC"""
     ) or []
 
+# ============== FUNCIONES DE ADVERTENCIAS ==============
+
+def get_user_warnings(user_id: int) -> dict:
+    """Obtiene las advertencias de un usuario."""
+    result = db_safe_run(
+        "SELECT user_id, username, warnings_count, last_warning, banned_until, ban_reason FROM user_warnings WHERE user_id = ?",
+        (user_id,), fetchone=True
+    )
+    if result:
+        return {
+            "user_id": result[0],
+            "username": result[1],
+            "warnings_count": result[2],
+            "last_warning": result[3],
+            "banned_until": result[4],
+            "ban_reason": result[5]
+        }
+    return None
+
+def add_warning(user_id: int, username: str, reason: str = ""):
+    """Agrega una advertencia a un usuario. Si llega a 3, banea temporalmente."""
+    existing = get_user_warnings(user_id)
+    now = datetime.now().isoformat()
+
+    if existing:
+        new_count = existing["warnings_count"] + 1
+        if new_count >= 3:
+            # Ban temporal 3 horas
+            ban_until = (datetime.now() + timedelta(hours=3)).isoformat()
+            db_safe_run(
+                """UPDATE user_warnings
+                   SET warnings_count = ?, last_warning = ?, banned_until = ?, ban_reason = ?, updated_at = ?, username = ?
+                   WHERE user_id = ?""",
+                (new_count, now, ban_until, reason, now, username, user_id),
+                commit=True
+            )
+            return new_count, True  # True indica que fue baneado
+        else:
+            db_safe_run(
+                """UPDATE user_warnings
+                   SET warnings_count = ?, last_warning = ?, updated_at = ?, username = ?
+                   WHERE user_id = ?""",
+                (new_count, now, now, username, user_id),
+                commit=True
+            )
+    else:
+        db_safe_run(
+            """INSERT INTO user_warnings
+               (user_id, username, warnings_count, last_warning, updated_at)
+               VALUES (?, ?, 1, ?, ?)""",
+            (user_id, username, now, now),
+            commit=True
+        )
+        new_count = 1
+
+    return new_count, False
+
+def is_user_banned(user_id: int) -> tuple[bool, str]:
+    """Verifica si un usuario está baneado temporalmente. Retorna (baneado, razón)."""
+    warnings = get_user_warnings(user_id)
+    if warnings and warnings["banned_until"]:
+        ban_until = datetime.fromisoformat(warnings["banned_until"])
+        if datetime.now() < ban_until:
+            return True, warnings["ban_reason"] or "Comportamiento inadecuado"
+        else:
+            # Ban expirado, limpiar
+            db_safe_run("UPDATE user_warnings SET banned_until = NULL, ban_reason = NULL WHERE user_id = ?", (user_id,), commit=True)
+    return False, ""
+
+def estimar_fecha_creacion(user_id: int) -> str:
+    """Estima la fecha de creación de una cuenta de Telegram basada en su ID."""
+    ids = sorted(TELEGRAM_ID_AGES.keys())
+
+    if user_id < ids[0]:
+        return "Ancestral (Pre-2013)"
+    if user_id > ids[-1]:
+        # Extrapolación lineal para IDs más nuevos
+        # Usar los últimos dos puntos para calcular la pendiente
+        last_id = ids[-1]
+        prev_id = ids[-2]
+        last_ts = TELEGRAM_ID_AGES[last_id]
+        prev_ts = TELEGRAM_ID_AGES[prev_id]
+
+        # Pendiente: cambio en timestamp por cambio en ID
+        slope = (last_ts - prev_ts) / (last_id - prev_id)
+
+        # Extrapolar
+        extrapolated_ts = last_ts + slope * (user_id - last_id)
+
+        dt = datetime.fromtimestamp(extrapolated_ts / 1000)
+        return dt.strftime("%m/%Y")
+
+    # Interpolación lineal
+    for i in range(len(ids) - 1):
+        lower_id = ids[i]
+        upper_id = ids[i+1]
+        if lower_id <= user_id <= upper_id:
+            lower_ts = TELEGRAM_ID_AGES[lower_id]
+            upper_ts = TELEGRAM_ID_AGES[upper_id]
+
+            ratio = (user_id - lower_id) / (upper_id - lower_id)
+            estimated_ts = lower_ts + ratio * (upper_ts - lower_ts)
+
+            dt = datetime.fromtimestamp(estimated_ts / 1000)
+            return dt.strftime("%m/%Y")
+
+    return "Desconocido"
+
 async def ensure_user(user: User):
     if not db_safe_run("SELECT 1 FROM subscribers WHERE chat_id = ?", (user.id,), fetchone=True):
         joined_at = datetime.now().isoformat()
@@ -319,13 +488,14 @@ async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await ensure_user(user)
+    nombre_seguro = html.escape(user.first_name or "Mortal")
     texto = (
-        f"🛕 *Bienvenido al Templo de Mashi, mortal {user.mention_markdown()}.*\n\n"
+        f"🛕 <b>Bienvenido al Templo {nombre_seguro}.</b>\n\n"
         "Yo, el Guardián Erudito Caído, custodio este refugio de sabiduría.\n"
-        "Explora mis dones:\n• 📜 /relato\n• 🛒 /tienda"
+        "Explora mis dones:\n• 📜 /relato\n• 🛒 /tienda\n• 🛡️ /info"
     )
     keyboard = [[InlineKeyboardButton("🛒 Tienda", url=ITCH_URL)]]
-    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
@@ -351,6 +521,54 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Explora las Ofrendas", url=ITCH_URL)]]
     await update.message.reply_text("Entra al santuario de creaciones.", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@restricted_access
+async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para inspeccionar la esencia de un mortal."""
+    if not update.message.reply_to_message:
+        target_user = update.effective_user
+        target_msg = update.message
+    else:
+        target_user = update.message.reply_to_message.from_user
+        target_msg = update.message.reply_to_message
+
+    # Obtener reputación
+    rep_data = get_user_reputation(target_user.id)
+    reputacion = rep_data["reputation"] if rep_data else 50
+    edad_estimada = estimar_fecha_creacion(target_user.id)
+
+    # Emoji según reputación
+    if reputacion >= 70:
+        emoji_rep = "😇"
+    elif reputacion >= 40:
+        emoji_rep = "😐"
+    elif reputacion >= 20:
+        emoji_rep = "😠"
+    else:
+        emoji_rep = "💀"
+
+    # Información básica
+    texto = f"🛡️ *Análisis del Mortal:*\n\n"
+    texto += f"👤 *Nombre:* {target_user.mention_markdown()}\n"
+    texto += f"🆔 *ID:* `{target_user.id}`\n"
+    texto += f"📅 *Edad Estimada:* {edad_estimada}\n"
+    texto += f"{emoji_rep} *Reputación:* {reputacion}/100\n"
+
+    # Si es un forward, mostrar origen
+    if target_msg.forward_from:
+        fwd_user = target_msg.forward_from
+        fwd_edad = estimar_fecha_creacion(fwd_user.id)
+        texto += f"\n🔄 *Mensaje Reenviado de:*\n"
+        texto += f"👤 {fwd_user.mention_markdown()}\n"
+        texto += f"🆔 `{fwd_user.id}` | 📅 {fwd_edad}\n"
+    elif target_msg.forward_from_chat:
+        fwd_chat = target_msg.forward_from_chat
+        texto += f"\n🔄 *Mensaje Reenviado de Chat:*\n"
+        texto += f"📢 {fwd_chat.title} (`{fwd_chat.id}`)\n"
+    elif target_msg.forward_sender_name:
+        texto += f"\n🔄 *Mensaje Reenviado de:* {target_msg.forward_sender_name} (oculto)\n"
+
+    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+
 
 ###############################################################################
 # BLOQUE 7: COMANDOS DE ADMINISTRADOR
@@ -361,17 +579,17 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reputacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando exclusivo del OWNER para ver la tabla de reputaciones."""
     reputaciones = get_all_reputations()
-    
+
     if not reputaciones:
         await update.message.reply_text("📊 No hay datos de reputación aún.")
         return
-    
+
     texto = "📊 *REGISTRO DE REPUTACIONES*\n"
     texto += "━" * 30 + "\n\n"
-    
+
     for row in reputaciones:
         user_id, username, rep, total_ins, ultimo_ins, memoria = row
-        
+
         # Emoji según reputación
         if rep >= 70:
             emoji = "😇"
@@ -381,24 +599,100 @@ async def reputacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji = "😠"
         else:
             emoji = "💀"
-        
+
         texto += f"{emoji} *{username or 'Desconocido'}*\n"
         texto += f"   ├ ID: `{user_id}`\n"
         texto += f"   ├ Reputación: {rep}/100\n"
         texto += f"   ├ Insultos totales: {total_ins}\n"
-        
+
         if ultimo_ins:
             texto += f"   ├ Último insulto: _{ultimo_ins}_\n"
-        
+
         if memoria:
             insultos = memoria.split("|")[-3:]  # Últimos 3
             texto += f"   └ Memoria: {', '.join(insultos)}\n"
         else:
             texto += f"   └ Memoria: (vacía)\n"
-        
+
         texto += "\n"
-    
+
     await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+
+@owner_only
+@restricted_access
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando exclusivo del OWNER para obtener JSON del mensaje respondido."""
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Responde al mensaje que quieres analizar.")
+        return
+
+    rtm = update.message.reply_to_message
+    json_str = json.dumps(rtm.to_dict(), indent=2, ensure_ascii=False)
+    if len(json_str) > 4096:
+        await update.message.reply_text("El JSON es demasiado largo para enviar.", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(f"<code>{json_str}</code>", parse_mode=ParseMode.HTML)
+
+@owner_only
+@restricted_access
+async def advertir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para advertir a un usuario respondido."""
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Responde al mensaje del usuario a advertir.")
+        return
+
+    target = update.message.reply_to_message.from_user
+    reason = " ".join(context.args) if context.args else "Comportamiento inadecuado"
+
+    warnings_count, was_banned = add_warning(target.id, target.username or target.first_name, reason)
+
+    if was_banned:
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, target.id, until_date=datetime.now() + timedelta(hours=3))
+            await update.message.reply_text(f"El mortal {target.mention_html()} ha sido exiliado temporalmente (3h) por acumulación de advertencias.", parse_mode=ParseMode.HTML)
+            db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("exilio_temporal", target.id, datetime.now().isoformat()), commit=True)
+        except Exception as e:
+            logger.error(f"Error baneando: {e}")
+    else:
+        await update.message.reply_text(f"⚠️ Advertencia {warnings_count}/3 para {target.mention_html()}. Razón: {reason}", parse_mode=ParseMode.HTML)
+
+@owner_only
+@restricted_access
+async def silenciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para silenciar (restrict) a un usuario respondido por 1 hora."""
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Responde al mensaje del usuario a silenciar.")
+        return
+
+    target = update.message.reply_to_message.from_user
+    try:
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            target.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=datetime.now() + timedelta(hours=1)
+        )
+        await update.message.reply_text(f"El mortal {target.mention_html()} ha sido silenciado por 1 hora.", parse_mode=ParseMode.HTML)
+        db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("silenciar", target.id, datetime.now().isoformat()), commit=True)
+    except Exception as e:
+        await update.message.reply_text(f"No pude silenciar al usuario: {e}")
+
+@owner_only
+@restricted_access
+async def expulsar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para expulsar (kick) a un usuario respondido."""
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Responde al mensaje del usuario a expulsar.")
+        return
+
+    target = update.message.reply_to_message.from_user
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+        await context.bot.unban_chat_member(update.effective_chat.id, target.id)  # Kick = ban + unban inmediato
+        await update.message.reply_text(f"El mortal {target.mention_html()} ha sido expulsado del templo.", parse_mode=ParseMode.HTML)
+        db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("expulsar", target.id, datetime.now().isoformat()), commit=True)
+    except Exception as e:
+        await update.message.reply_text(f"No pude expulsar al usuario: {e}")
 
 @owner_only
 @restricted_access
@@ -439,6 +733,40 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     
     user = update.effective_user
     msg_text = update.message.text
+
+    # ANTI-FLOOD: Verificar si está floodando
+    now = datetime.now().timestamp()
+    if user.id not in FLOOD_TRACK:
+        FLOOD_TRACK[user.id] = []
+    FLOOD_TRACK[user.id].append(now)
+    # Mantener solo mensajes de los últimos 10 segundos
+    FLOOD_TRACK[user.id] = [t for t in FLOOD_TRACK[user.id] if now - t < 10]
+    if len(FLOOD_TRACK[user.id]) > 5:  # Más de 5 mensajes en 10s
+        try:
+            await context.bot.restrict_chat_member(
+                update.effective_chat.id,
+                user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=datetime.now() + timedelta(minutes=5)
+            )
+            await update.message.reply_text(f"El mortal {user.mention_html()} ha sido silenciado por flood (5 min).", parse_mode=ParseMode.HTML)
+            return  # No procesar más
+        except Exception as e:
+            logger.error(f"Error anti-flood: {e}")
+
+    # Detección de reenvíos
+    forward_info = ""
+    if update.message.forward_from:
+        fwd_user = update.message.forward_from
+        fwd_rep = get_user_reputation(fwd_user.id)
+        fwd_reputacion = fwd_rep["reputation"] if fwd_rep else 50
+        fwd_edad = estimar_fecha_creacion(fwd_user.id)
+        forward_info = f"El mensaje es un reenvío de {fwd_user.first_name} (ID: {fwd_user.id}, Edad: {fwd_edad}, Reputación: {fwd_reputacion}/100)."
+    elif update.message.forward_from_chat:
+        fwd_chat = update.message.forward_from_chat
+        forward_info = f"El mensaje es un reenvío del chat '{fwd_chat.title}' (ID: {fwd_chat.id})."
+    elif update.message.forward_sender_name:
+        forward_info = f"El mensaje es un reenvío de '{update.message.forward_sender_name}' (usuario oculto)."
     
     # Identificar si el usuario es Kai (el padre de Mashi)
     es_kai = user.id == OWNER_ID
@@ -448,6 +776,18 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     es_hostil, insulto_detectado = detectar_hostilidad(msg_text)
     user_rep_data = get_user_reputation(user.id)
     reputacion_actual = user_rep_data["reputation"] if user_rep_data else 50
+
+    # ============== DETECCIÓN DE RETOS/CONFRONTACIONES ==============
+    retos_patterns = [
+        r'\b(échame|sácame|expúlsame|báname|kick|ban)\b',
+        r'\b(hazlo|atrévete|prueba|inténtalo)\b.*\b(expuls|ban|kick|sac)\b',
+        r'\b(no.*puedes?|cobarde?|débil?)\b.*\b(expuls|ban)\b'
+    ]
+    es_reto = False
+    for pattern in retos_patterns:
+        if re.search(pattern, msg_text, re.IGNORECASE):
+            es_reto = True
+            break
     
     # Si es hostil y NO es Kai, actualizar reputación
     if es_hostil and not es_kai:
@@ -458,6 +798,21 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
             insulto=insulto_detectado
         )
         logger.info(f"🔥 Hostilidad detectada de {user.first_name}: '{insulto_detectado}'")
+
+        # Si además es reto y reputación muy baja, advertir
+        if es_reto and reputacion_actual < 30:
+            warnings_count, was_banned = add_warning(user.id, user.username or user.first_name, f"Insulto + reto: {insulto_detectado}")
+            if was_banned:
+                # Banear temporalmente
+                try:
+                    await context.bot.ban_chat_member(update.effective_chat.id, user.id, until_date=datetime.now() + timedelta(hours=3))
+                    await update.message.reply_text(f"El mortal {user.mention_html()} ha sido exiliado temporalmente por comportamiento inadecuado. Regresará en 3 horas.", parse_mode=ParseMode.HTML)
+                    db_safe_run("INSERT INTO mod_logs (action, target_id, timestamp) VALUES (?, ?, ?)", ("exilio_temporal", user.id, datetime.now().isoformat()), commit=True)
+                except Exception as e:
+                    logger.error(f"Error baneando: {e}")
+            else:
+                await update.message.reply_text(f"⚠️ Advertencia {warnings_count}/3 para {user.mention_html()}. Comportamiento inadecuado.", parse_mode=ParseMode.HTML)
+
     elif not es_hostil and not es_kai:
         # Mensaje normal = pequeña mejora de reputación
         if random.random() < 0.3:  # 30% de chance de mejorar rep
@@ -509,7 +864,10 @@ ACTIVA EL MÓDULO DE CONTRAATAQUE:
             elif reputacion_actual > 70:
                 prompt_sistema += f"\n\nNOTA: Este usuario ({user.first_name}) tiene buena reputación ({reputacion_actual}/100). Puedes ser más amable."
         
-        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde al último mensaje como Mashi:"
+        prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\n"
+        if forward_info:
+            prompt_usuario += f"INFORMACIÓN ADICIONAL: {forward_info}\n\n"
+        prompt_usuario += "Responde al último mensaje como Mashi:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
         
@@ -540,9 +898,10 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except: pass
         elif not member.is_bot:
             await ensure_user(member)
+            edad_estimada = estimar_fecha_creacion(member.id)
             kb = [[InlineKeyboardButton("Soy Mayor de 18", callback_data=f"age_yes:{member.id}")],
                   [InlineKeyboardButton("Soy Menor", callback_data=f"age_no:{member.id}")]]
-            await context.bot.send_message(chat_id, f"Mortal {member.mention_html()}, confirma tu edad (+18) para permanecer en el templo.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+            await context.bot.send_message(chat_id, f"Mortal {member.mention_html()} (Cuenta: {edad_estimada}), confirma tu edad (+18) para permanecer en el templo.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def age_verification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -593,9 +952,14 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("relato", relato))
     application.add_handler(CommandHandler("tienda", tienda))
+    application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("purificar", purificar))
     application.add_handler(CommandHandler("exilio", exilio))
     application.add_handler(CommandHandler("reputacion", reputacion))
+    application.add_handler(CommandHandler("debug", debug))
+    application.add_handler(CommandHandler("advertir", advertir))
+    application.add_handler(CommandHandler("silenciar", silenciar))
+    application.add_handler(CommandHandler("expulsar", expulsar))
     
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
