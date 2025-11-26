@@ -57,7 +57,7 @@ GENERATION_CONFIG = {
     "temperature": 0.9,
     "top_p": 0.95,
     "top_k": 64,
-    "max_output_tokens": 2048, # Reducido para chat rápido (antes 8192)
+    "max_output_tokens": 2048,
     "response_mime_type": "text/plain",
 }
 
@@ -70,7 +70,6 @@ ALLOWED_CHATS = [1890046858, -1001504263227, 5225682301]
 TELEGRAM_SYSTEM_IDS = [777000, 1087968824, 136817688]
 
 # --- LORE COMPLETO E INMUTABLE ---
-# Este texto es la "Biblia" de Mashi. Se le da a la IA en cada interacción.
 LORE_MASHI = """
 ERES: Mashi (Nombre real: Mamoru Shishi).
 ESPECIE: Dios león (Kemono) disfrazado de oficinista humano.
@@ -164,7 +163,7 @@ async def consultar_ia(prompt_sistema, prompt_usuario=""):
         model = genai.GenerativeModel(
             model_name="gemini-1.5-flash",
             generation_config=GENERATION_CONFIG,
-            system_instruction=prompt_sistema  # ¡Aquí se inyecta el Lore!
+            system_instruction=prompt_sistema
         )
 
         # Enviamos el mensaje del usuario
@@ -199,10 +198,6 @@ def owner_only(func):
             await update.message.reply_text("Mis asuntos son solo con el maestro Kai.")
     return wrapped
 
-async def send_random_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str, choices: list):
-    chosen_item = random.choice(choices)
-    await update.message.reply_text(f"{intro_text}\n\n{chosen_item}")
-
 
 ###############################################################################
 # BLOQUE 6: COMANDOS PÚBLICOS
@@ -223,17 +218,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted_access
 async def relato(update: Update, context: ContextTypes.DEFAULT_TYPE):    
     if not GEMINI_API_KEY:
-        await send_random_choice(update, context, "El pasado es un eco...", RELATOS_DEL_GUARDIAN)
+        await update.message.reply_text("Mi memoria está nublada hoy (Falta API Key).")
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # Aquí pasamos el LORE COMPLETO + la instrucción específica
+    # Usamos la función con el Lore integrado
     instruccion_adicional = "INSTRUCCIÓN: Escribe un micro-relato (máximo 4 frases) sobre una gloria olvidada de tu pasado, tu abuelo Lucifer o tu padre Kai. Usa un tono solemne."
-    
-    # Al usar el Lore como system_instruction en consultar_ia, aquí solo enviamos la petición
-    # Pero para asegurar coherencia total, combinamos si es necesario o confiamos en el system_instruction
-    # En este diseño, consultar_ia toma 'prompt_sistema' y 'prompt_usuario'.
     
     respuesta = await consultar_ia(LORE_MASHI, instruccion_adicional)
     
@@ -304,10 +295,9 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         
         historial_texto = "\n".join(CHAT_CONTEXT)
-        
-        # AQUÍ ESTÁ LA CORRECCIÓN: Enviamos LORE_MASHI como prompt del sistema
         prompt_usuario = f"HISTORIAL RECIENTE DEL CHAT:\n{historial_texto}\n\nINSTRUCCIÓN: Responde al último mensaje actuando como Mashi. Sé breve y natural."
         
+        # Usamos la función con el Lore integrado
         respuesta = await consultar_ia(LORE_MASHI, prompt_usuario)
         
         if respuesta:
@@ -396,9 +386,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
     
-    # Lógica conversacional (ANTES de la purga de bots)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
-    
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
 
     logger.info("Mashi está en línea.")
