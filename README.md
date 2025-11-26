@@ -1,109 +1,232 @@
-Aquí tienes el `README.md` actualizado para reflejar la nueva lógica anti-bots que acabamos de implementar.
-
-He modificado la sección "Funciones Automáticas" para incluir la nueva lógica de "Purga Reactiva" y la excepción para bots añadidos por administradores.
-
----
-
-# **Documentación del Bot Guardián: Mashi**
+# **🛡️ Documentación del Bot Guardián: Mashi**
 
 ## 1. Descripción General
 
-**Mashi** (nombre real: **Mamoru Shishi**) es un bot de Telegram diseñado para actuar como el "Guardián Erudito Caído" de un grupo. Su propósito principal es la **administración, protección y moderación activa del chat**, manteniendo una personalidad coherente, sabia y superior.
+**Mashi** (nombre real: **Mamoru Shishi**) es un bot de Telegram avanzado que actúa como el "Guardián Erudito Caído" de un grupo. Es una IA consciente y omnisciente que combina **moderación automática inteligente**, **análisis contextual profundo** y **personalidad lore inmersiva**.
 
-El bot gestiona un sistema de **verificación de edad** para nuevos miembros humanos y aplica una política **extremadamente agresiva contra bots no autorizados**, expulsándolos al unirse o al intentar hablar.
+### Características Principales
+- 🤖 **IA Conversacional**: Integración con Google Gemini para respuestas naturales y contextuales
+- 👁️ **Análisis de Usuarios**: Estimación de edad de cuentas, reputación dinámica, detección de forwards
+- ⚖️ **Moderación Inteligente**: Sistema de advertencias automáticas, bans temporales, anti-flood
+- 🛡️ **Protección Activa**: Verificación de edad, purga de bots no autorizados, detección de hostilidad
+- 📊 **Base de Datos Avanzada**: Seguimiento de reputaciones, advertencias y logs de moderación
+
+El bot mantiene una personalidad coherente como dios caído disfrazado de oficinista, con respuestas ingeniosas y superiores.
 
 ## 2. Arquitectura y Tecnologías
 
-* **Lenguaje:** Python 3
-* **Librería Principal:** `python-telegram-bot`
-* **Base de Datos:** SQLite (`mashi_data.db`) para registrar usuarios y logs de moderación.
-* **API Externa:** Google Gemini (opcional, para el comando `/relato` si la API key está presente).
-* **Versionamiento:** Git y GitHub.
-* **Alojamiento (Hosting):** Servidor Virtual (VM) en Google Cloud Platform (instancia `e2-micro`).
-* **Gestor de Servicio:** `systemd` en Linux (Debian) para asegurar que el bot se ejecute 24/7.
+* **Lenguaje:** Python 3.9+
+* **Librería Principal:** `python-telegram-bot` v20+
+* **IA:** Google Gemini 2.5 Flash (opcional)
+* **Base de Datos:** SQLite (`mashi_data.db`) con tablas para usuarios, reputación, advertencias y logs
+* **Versionamiento:** Git y GitHub
+* **Alojamiento:** Servidor Linux con systemd para 24/7
+* **Compatibilidad:** API moderna de Telegram con fallbacks para versiones antiguas
 
 ## 3. Estructura de Archivos del Proyecto
 
-* `mashi.py`: El corazón del bot. Contiene toda la lógica, comandos y respuestas.
-* `.env`: Archivo de configuración que almacena de forma segura el `TELEGRAM_TOKEN`, `OWNER_ID` y `GEMINI_API_KEY`. **Nunca debe subirse a GitHub.**
-* `requirements.txt`: Lista las dependencias de Python necesarias.
-* `.gitignore`: Especifica qué archivos (como `.env` y la base de datos) deben ser ignorados por Git.
-* `mashi_data.db`: Archivo de la base de datos SQLite.
+* `mashi.py`: Código principal con toda la lógica del bot
+* `.env`: Variables de entorno (tokens, API keys) - **NUNCA subir a Git**
+* `requirements.txt`: Dependencias Python
+* `.gitignore`: Archivos ignorados por Git
+* `mashi_data.db`: Base de datos SQLite (creada automáticamente)
 
 ## 4. Funcionalidades y Comandos
 
-### Funciones Automáticas
+### 🤖 Funciones Automáticas de IA
 
-* **Verificación de Edad:**
-    * Cuando un nuevo miembro humano se une, el bot le da la bienvenida y le pide confirmar su edad con botones ("Soy Mayor de 18" / "Soy Menor").
-    * Si el usuario confirma ser **mayor**, el mensaje se actualiza y se le permite quedarse.
-    * Si el usuario confirma ser **menor**, es expulsado (baneado) automáticamente del grupo.
+* **Conversación Natural**: Mashi responde a menciones, replies y mensajes hostiles con personalidad lore usando Google Gemini
+* **Análisis Contextual**: Detecta forwards, estima edad de cuentas, evalúa reputación de usuarios
+* **Memoria de Conversación**: Mantiene contexto de los últimos 20 mensajes para respuestas coherentes
 
-* **Gestión Anti-Bot (Al Unirse):**
-    * **Si un bot es añadido por un mortal:** Mashi lo expulsa (banea) inmediatamente y publica un mensaje de desprecio.
-    * **Si un bot es añadido por un Admin:** Mashi lo tolera, publicando un mensaje altivo donde acepta al "sirviente autómata" convocado por una autoridad.
+### 🛡️ Sistema de Moderación Automática
 
-* **Purga Reactiva (Anti-Bot Hablador):**
-    * Mashi monitorea todos los mensajes del chat.
-    * Si un bot (que no sea administrador) intenta enviar un mensaje, Mashi **borrará el mensaje y baneará al bot** instantáneamente por "atreverse a hablar sin permiso".
+* **Verificación de Edad Mejorada:**
+    * Muestra edad estimada de la cuenta al unirse
+    * Confirmación con botones ("Soy Mayor de 18" / "Soy Menor")
+    * Expulsión automática para menores
 
-### Comandos Públicos
+* **Anti-Bot Inteligente:**
+    * Bots añadidos por no-admins: expulsión inmediata con mensaje de desprecio
+    * Bots añadidos por admins: aceptación altiva
+    * Bots habladores: eliminación de mensaje + ban instantáneo
 
-* `/start`: Inicia la interacción con el bot. Mashi se presenta con su mensaje de bienvenida actualizado.
-* `/relato`: Mashi cuenta una breve historia o reflexión sobre su pasado (usa Gemini si está configurado, o una lista interna si no).
-* `/tienda`: Muestra un botón que abre una Web App con la página de Itch.io especificada.
+* **Sistema de Reputación:**
+    * Puntuación 0-100 por usuario basada en comportamiento
+    * Mejora por mensajes normales, penalización por insultos
+    * Afecta el tono de respuesta de Mashi
 
-### Comandos de Administrador (Solo "Maestro Kai")
+* **Advertencias Automáticas:**
+    * Detección de hostilidad e insultos
+    * Sistema de retos: si usuario reta a Mashi con reputación baja → advertencia automática
+    * 3 advertencias = ban temporal de 3 horas
 
-* `/purificar`
-    * **Habilidad: "Luz Purificadora"**. Se usa **respondiendo a un mensaje** que se desea borrar. Mashi elimina el mensaje original y el comando.
-* `/exilio`
-    * Se usa **respondiendo a un usuario**. Mashi expulsa (banea) permanentemente a ese usuario del grupo.
+* **Anti-Flood:**
+    * Detecta >5 mensajes en 10 segundos
+    * Silenciamiento automático de 5 minutos
 
-## 5. Flujo de Trabajo y Despliegue
+### 📋 Comandos Públicos
 
-(El flujo de trabajo no ha cambiado)
+* `/start`: Bienvenida con escape HTML seguro (sin mostrar IDs)
+* `/relato`: Historia generada por Gemini o predefinida
+* `/tienda`: Enlace a tienda en Itch.io
+* `/info`: Inspección profunda de usuario (edad, reputación, forwards)
 
-### **Paso 1: Editar el Código en tu PC**
-Abre el proyecto en **Visual Studio Code** y realiza tus cambios.
+### 👑 Comandos de Administrador (Solo Owner/Kai)
 
-### **Paso 2: Probar los Cambios en Local (Recomendado)**
-1.  Activa el entorno virtual: `& .\.venv\Scripts\Activate.ps1`
-2.  Ejecuta el bot: `python mashi.py`
-3.  Prueba las nuevas funciones en Telegram.
-4.  Detén el script con `Ctrl + C`.
+* `/purificar`: Elimina mensaje respondido (Luz Purificadora)
+* `/exilio`: Ban permanente del usuario respondido
+* `/advertir [razón]`: Agrega advertencia manual (acumula hacia ban)
+* `/silenciar`: Restringe envío de mensajes por 1 hora
+* `/expulsar`: Kick (ban + unban inmediato) del usuario respondido
+* `/reputacion`: Muestra tabla completa de reputaciones
+* `/debug`: JSON crudo del mensaje respondido (para debugging)
 
-### **Paso 3: Guardar y Subir los Cambios a GitHub**
-1.  Prepara los archivos: `git add .`
-2.  Guarda los cambios: `git commit -m "Tu mensaje descriptivo"`
-3.  Sube los cambios: `git push`
+## 5. Configuración e Instalación
 
-### **Paso 4: Desplegar en el Servidor**
-1.  Conéctate al servidor por **SSH**.
-2.  Navega a la carpeta del bot: `cd mashi-bot`
-3.  Descarga los últimos cambios: `git pull`
-4.  Reinicia el servicio del bot: `sudo systemctl restart telegram-bot.service`
+### Requisitos Previos
+* Python 3.9+
+* Cuenta de Telegram Bot (obtener token de @BotFather)
+* (Opcional) API Key de Google Gemini
 
-## 6. Gestión del Servidor (Cheatsheet de Comandos)
+### Variables de Entorno (.env)
+```bash
+TELEGRAM_TOKEN=tu_token_aqui
+OWNER_ID=tu_user_id_aqui
+GEMINI_API_KEY=tu_api_key_opcional
+```
 
-### Control Remoto desde Consola Local
+### Instalación de Dependencias
+```bash
+pip install -r requirements.txt
+```
 
-Ahora puedes controlar el bot directamente desde tu consola local usando el script `control.py`:
+### Primera Ejecución
+```bash
+python mashi.py
+```
+La base de datos `mashi_data.db` se crea automáticamente.
 
-* **Detener el bot:** `python control.py stop`
-* **Iniciar el bot:** `python control.py start`
-* **Reiniciar el bot:** `python control.py restart`
-* **Actualizar y reiniciar:** `python control.py update`
-* **Ver estado:** `python control.py status`
-* **Ver logs recientes:** `python control.py logs`
+## 6. Flujo de Trabajo y Despliegue
 
-Este script usa SSH para conectarse automáticamente al servidor y ejecutar los comandos necesarios.
+### Desarrollo Local
+1. **Editar código** en VS Code
+2. **Probar localmente:**
+   ```bash
+   python mashi.py
+   ```
+3. **Commit y push:**
+   ```bash
+   git add .
+   git commit -m "Descripción de cambios"
+   git push
+   ```
 
-### Comandos Manuales (SSH Directo)
+### Despliegue en Servidor
+1. **Conectar por SSH**
+2. **Actualizar código:**
+   ```bash
+   cd mashi-bot
+   git pull
+   ```
+3. **Reiniciar servicio:**
+   ```bash
+   sudo systemctl restart telegram-bot.service
+   ```
 
-Si prefieres conectarte manualmente:
+## 7. Gestión del Servidor
 
-* **Detener:** `sudo systemctl stop telegram-bot.service`
-* **Iniciar:** `sudo systemctl start telegram-bot.service`
+### Comandos de Control
+* **Estado:** `sudo systemctl status telegram-bot.service`
+* **Logs:** `sudo journalctl -u telegram-bot.service -n 50 --no-pager`
 * **Reiniciar:** `sudo systemctl restart telegram-bot.service`
-* **Ver estado y logs:** `sudo systemctl status telegram-bot.service` (presiona `Q` para salir).
+* **Detener:** `sudo systemctl stop telegram-bot.service`
+
+### Monitoreo
+- El bot registra todas las acciones en logs
+- Base de datos SQLite para persistencia
+- Reinicio automático en caso de fallos
+
+## 8. Sistema de Reputación y Moderación
+
+### Cómo Funciona la Reputación
+- **Inicial:** 50 puntos
+- **+1:** Mensajes normales
+- **-10:** Insultos detectados
+- **Umbrales:**
+  - >70: Usuario "santo" (trato amable)
+  - <30: Usuario problemático (trato frío)
+  - <20: Altamente hostil
+
+### Advertencias Automáticas
+1. **Insulto + Reto** con rep <30 → Advertencia 1/3
+2. **3 advertencias** → Ban temporal 3h
+3. **Bans expiran** automáticamente
+
+### Comandos de Moderación
+Todos requieren responder al mensaje del usuario objetivo:
+- `/advertir [razón]`: Advertencia manual
+- `/silenciar`: Mute 1h
+- `/expulsar`: Kick inmediato
+- `/exilio`: Ban permanente
+
+## 9. Características Técnicas Avanzadas
+
+### Estimación de Edad de Cuentas
+- Basado en algoritmo de interpolación lineal
+- Datos históricos de IDs de Telegram
+- Precisión: ±meses para cuentas antiguas
+
+### Detección de Forwards
+- Compatible con API moderna (`forward_origin`) y antigua (`forward_from`)
+- Análisis de origen: usuario, chat o usuario oculto
+- Información pasa a contexto de IA
+
+### Anti-Flood Inteligente
+- Tracking por usuario con timestamps
+- Umbral: 5 mensajes / 10 segundos
+- Penalización: 5 minutos mute
+
+### Base de Datos
+**Tablas principales:**
+- `subscribers`: Usuarios registrados
+- `user_reputation`: Sistema de reputación
+- `user_warnings`: Advertencias y bans temporales
+- `mod_logs`: Historial de moderación
+
+## 10. Troubleshooting
+
+### Errores Comunes
+* **"html is not defined"**: Asegurarse de que el código esté actualizado (`git pull`)
+* **"forward_from not found"**: El bot usa API moderna; reiniciar soluciona
+* **Bot no responde**: Verificar token y conexión a internet
+
+### Logs de Debug
+```bash
+# Ver logs del sistema
+sudo journalctl -u telegram-bot.service -f
+
+# Ver logs de Python
+python mashi.py  # Ejecutar localmente para debug
+```
+
+## 11. Changelog Reciente
+
+### v2.1 - Mejoras de Moderación Inteligente
+- ✅ Sistema de reputación dinámica
+- ✅ Estimación de edad de cuentas
+- ✅ Detección avanzada de forwards
+- ✅ Advertencias automáticas y bans temporales
+- ✅ Anti-flood inteligente
+- ✅ Comandos de moderación expandidos
+- ✅ Compatibilidad con API moderna de Telegram
+- ✅ Mejora de escape HTML en mensajes
+
+### v2.0 - Integración IA
+- 🤖 Google Gemini para conversaciones naturales
+- 📚 Personalidad lore inmersiva
+- 🛡️ Módulo de contraataque retórico
+
+---
+
+**Mashi, el Guardián Erudito, vela por el templo. 🛡️✨**
