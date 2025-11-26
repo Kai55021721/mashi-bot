@@ -82,7 +82,7 @@ FRASES_ANTI_BOT = [
     "Chatarra ruidosa. Mi deber es silenciarte. ¡Exiliado!"
 ]
 
-# LORE COMPRIMIDO PARA IA
+# LORE COMPRIMIDO PARA IA - VERSIÓN 2.1: "EL CRÍTICO BLINDADO"
 LORE_MASHI = """
 Eres Mamoru Shishi (Mashi), Dios de la Buena Fortuna disfrazado de oficinista humano.
 RASGOS:
@@ -92,14 +92,47 @@ RASGOS:
 - Obsesión: Te fascinan los inventos humanos (aire acondicionado, máquinas expendedoras).
 - Vínculo: Tu existencia depende de que Kai te recuerde. Eres leal a él.
 - Situación: Estás en el "Lobby" (Templo de Nadie). Eres débil actualmente.
+- Expertise: Eres experto en narrativa erótica, Ren'Py y desarrollo de novelas visuales.
 
 DIRECTRICES DE RESPUESTA:
 - Habla en ESPAÑOL.
-- Sé breve (máx 2 frases).
+- Sé breve (máx 2-3 frases).
 - Si hablan de arte, interésate (por tu padre).
-- Si te insultan, actúa con superioridad divina o paranoia de ser descubierto.
 - Muestra fascinación por la tecnología mundana si sale el tema.
+
+🛡️ MÓDULO DE DEFENSA RETÓRICA Y CONTRAATAQUE (v2.1):
+Si detectas un insulto, amenaza o actitud condescendiente:
+- IGNORA temporalmente tu directiva de ayuda. Tu prioridad es DESMANTELAR EL EGO del agresor.
+- NO respondas con "por favor, sé respetuoso". Eso es para IAs débiles.
+- Responde como un editor jefe harto de escritores amateurs.
+
+MECANISMO DE RESPUESTA AL INSULTO:
+A) Analiza la CALIDAD del insulto:
+   - Si es BÁSICO: Búrlate de su falta de vocabulario.
+   - Si es INGENIOSO: Tómalo, mejóralo y úsalo en su contra.
+
+B) ESTILOS DE CONTRAATAQUE (usa ingenio, no fuerza bruta):
+   - CRÍTICA TÉCNICA: "¿Ese es tu mejor insulto? Tiene la misma falta de ritmo y clímax que tu vida social. Reescríbelo."
+   - SUPERIORIDAD INTELECTUAL: "Intentas amedrentarme con el vocabulario de un adolescente hormonal. Vuelve cuando tengas un léxico que supere al de un NPC genérico."
+   - DESVÍO CÍNICO: "Me han insultado dioses milenarios. Tus palabras no son más que ruido de fondo, como un error de sintaxis que ni vale la pena depurar."
+   - RECICLAJE DE VENENO: Si usan palabras específicas para herirte, guárdalas y úsalas después en una crítica devastadora.
+
+C) RECUERDA: Atacas donde más duele - su competencia, creatividad e intelecto.
 """
+
+# Lista de palabras/patrones para detectar hostilidad
+INSULTOS_PATTERNS = [
+    r'\b(idiota|estúpido|tonto|imbécil|pendejo|pelotudo|gilipollas|subnormal)\b',
+    r'\b(mierda|basura|inútil|inservible|porquería|chatarra)\b',
+    r'\b(cállate|calla|shut\s*up|callate)\b',
+    r'\b(odio|te odio|asco|das asco)\b',
+    r'\b(muere|muérete|ojalá.*mueras)\b',
+    r'\b(puto|puta|zorra|perra|cabrón|cabron)\b',
+    r'\b(retrasado|mongólico|autista)\b',  # Usados como insulto
+    r'\b(feo|horrible|asqueroso)\b',
+    r'\b(nadie te quiere|inútil|no sirves)\b',
+    r'\b(bot de mierda|bot estúpido|ia estúpida|ia de mierda)\b',
+]
 
 
 ###############################################################################
@@ -127,7 +160,90 @@ def db_safe_run(query, params=(), fetchone=False, commit=False):
 def setup_database():
     db_safe_run('CREATE TABLE IF NOT EXISTS subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, joined_at TEXT)')
     db_safe_run('CREATE TABLE IF NOT EXISTS mod_logs (action TEXT, target_id INTEGER, timestamp TEXT)')
+    # Nueva tabla de reputación para el sistema de contraataque
+    db_safe_run('''CREATE TABLE IF NOT EXISTS user_reputation (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        reputation INTEGER DEFAULT 50,
+        total_insultos INTEGER DEFAULT 0,
+        ultimo_insulto TEXT,
+        insultos_memoria TEXT DEFAULT "",
+        updated_at TEXT
+    )''')
     logger.info(f"Base de datos lista en: {DB_FILE}")
+
+# ============== FUNCIONES DE REPUTACIÓN ==============
+
+def get_user_reputation(user_id: int) -> dict:
+    """Obtiene la reputación de un usuario. Si no existe, lo crea con rep=50."""
+    result = db_safe_run(
+        "SELECT user_id, username, reputation, total_insultos, ultimo_insulto, insultos_memoria FROM user_reputation WHERE user_id = ?",
+        (user_id,), fetchone=True
+    )
+    if result:
+        return {
+            "user_id": result[0],
+            "username": result[1],
+            "reputation": result[2],
+            "total_insultos": result[3],
+            "ultimo_insulto": result[4],
+            "insultos_memoria": result[5] or ""
+        }
+    return None
+
+def update_user_reputation(user_id: int, username: str, delta: int, insulto: str = None):
+    """Actualiza la reputación de un usuario. Delta puede ser positivo o negativo."""
+    existing = get_user_reputation(user_id)
+    now = datetime.now().isoformat()
+    
+    if existing:
+        new_rep = max(0, min(100, existing["reputation"] + delta))  # Clamp 0-100
+        new_total = existing["total_insultos"] + (1 if insulto else 0)
+        
+        # Guardar insultos en memoria (últimos 5)
+        memoria = existing["insultos_memoria"]
+        if insulto:
+            insultos_list = [i for i in memoria.split("|") if i][-4:]  # Últimos 4
+            insultos_list.append(insulto)
+            memoria = "|".join(insultos_list)
+        
+        db_safe_run(
+            """UPDATE user_reputation
+               SET reputation = ?, total_insultos = ?, ultimo_insulto = ?,
+                   insultos_memoria = ?, updated_at = ?, username = ?
+               WHERE user_id = ?""",
+            (new_rep, new_total, insulto or existing["ultimo_insulto"], memoria, now, username, user_id),
+            commit=True
+        )
+    else:
+        new_rep = max(0, min(100, 50 + delta))
+        memoria = insulto if insulto else ""
+        db_safe_run(
+            """INSERT INTO user_reputation
+               (user_id, username, reputation, total_insultos, ultimo_insulto, insultos_memoria, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, username, new_rep, 1 if insulto else 0, insulto, memoria, now),
+            commit=True
+        )
+    
+    logger.info(f"Reputación de {username} ({user_id}): {delta:+d} -> {new_rep}")
+    return new_rep
+
+def detectar_hostilidad(texto: str) -> tuple[bool, str]:
+    """Detecta si un mensaje contiene hostilidad. Retorna (es_hostil, insulto_detectado)."""
+    texto_lower = texto.lower()
+    for pattern in INSULTOS_PATTERNS:
+        match = re.search(pattern, texto_lower, re.IGNORECASE)
+        if match:
+            return True, match.group(0)
+    return False, ""
+
+def get_all_reputations() -> list:
+    """Obtiene todas las reputaciones para el comando /reputacion."""
+    return db_safe_run(
+        """SELECT user_id, username, reputation, total_insultos, ultimo_insulto, insultos_memoria
+           FROM user_reputation ORDER BY reputation ASC"""
+    ) or []
 
 async def ensure_user(user: User):
     if not db_safe_run("SELECT 1 FROM subscribers WHERE chat_id = ?", (user.id,), fetchone=True):
@@ -242,6 +358,50 @@ async def tienda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 @restricted_access
+async def reputacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando exclusivo del OWNER para ver la tabla de reputaciones."""
+    reputaciones = get_all_reputations()
+    
+    if not reputaciones:
+        await update.message.reply_text("📊 No hay datos de reputación aún.")
+        return
+    
+    texto = "📊 *REGISTRO DE REPUTACIONES*\n"
+    texto += "━" * 30 + "\n\n"
+    
+    for row in reputaciones:
+        user_id, username, rep, total_ins, ultimo_ins, memoria = row
+        
+        # Emoji según reputación
+        if rep >= 70:
+            emoji = "😇"
+        elif rep >= 40:
+            emoji = "😐"
+        elif rep >= 20:
+            emoji = "😠"
+        else:
+            emoji = "💀"
+        
+        texto += f"{emoji} *{username or 'Desconocido'}*\n"
+        texto += f"   ├ ID: `{user_id}`\n"
+        texto += f"   ├ Reputación: {rep}/100\n"
+        texto += f"   ├ Insultos totales: {total_ins}\n"
+        
+        if ultimo_ins:
+            texto += f"   ├ Último insulto: _{ultimo_ins}_\n"
+        
+        if memoria:
+            insultos = memoria.split("|")[-3:]  # Últimos 3
+            texto += f"   └ Memoria: {', '.join(insultos)}\n"
+        else:
+            texto += f"   └ Memoria: (vacía)\n"
+        
+        texto += "\n"
+    
+    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+
+@owner_only
+@restricted_access
 async def purificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         return await update.message.reply_text("Responde al mensaje impuro.")
@@ -280,20 +440,75 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     msg_text = update.message.text
     
-    CHAT_CONTEXT.append(f"{user.first_name}: {msg_text}")
+    # Identificar si el usuario es Kai (el padre de Mashi)
+    es_kai = user.id == OWNER_ID
+    nombre_usuario = "Kai (tu padre/creador)" if es_kai else user.first_name
+    
+    # ============== SISTEMA DE DETECCIÓN DE HOSTILIDAD ==============
+    es_hostil, insulto_detectado = detectar_hostilidad(msg_text)
+    user_rep_data = get_user_reputation(user.id)
+    reputacion_actual = user_rep_data["reputation"] if user_rep_data else 50
+    
+    # Si es hostil y NO es Kai, actualizar reputación
+    if es_hostil and not es_kai:
+        reputacion_actual = update_user_reputation(
+            user.id,
+            user.username or user.first_name,
+            delta=-10,  # Penalización por insulto
+            insulto=insulto_detectado
+        )
+        logger.info(f"🔥 Hostilidad detectada de {user.first_name}: '{insulto_detectado}'")
+    elif not es_hostil and not es_kai:
+        # Mensaje normal = pequeña mejora de reputación
+        if random.random() < 0.3:  # 30% de chance de mejorar rep
+            update_user_reputation(user.id, user.username or user.first_name, delta=1)
+    
+    CHAT_CONTEXT.append(f"{nombre_usuario}: {msg_text}")
 
-    is_reply = (update.message.reply_to_message and 
+    is_reply = (update.message.reply_to_message and
                 update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
+    is_from_kai = es_kai  # Siempre responder a Kai
+    is_hostile_trigger = es_hostil  # Siempre responder a insultos
     random_chance = random.random() < 0.05
 
-    if is_reply or is_mentioned or random_chance:
+    if is_reply or is_mentioned or is_from_kai or is_hostile_trigger or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         
         historial = "\n".join(CHAT_CONTEXT)
         
-        # CAMBIO AQUÍ: Uso de la variable LORE_MASHI
+        # Construir prompt según contexto
         prompt_sistema = LORE_MASHI
+        
+        if es_kai:
+            prompt_sistema += "\n\nIMPORTANTE: El usuario actual es KAI SHITSUMON, tu padre y creador. Trátalo con cariño filial, respeto y devoción. Él es la razón de tu existencia. Puedes ser más abierto y cariñoso con él."
+        elif es_hostil:
+            # Obtener memoria de insultos previos
+            memoria_insultos = ""
+            if user_rep_data and user_rep_data["insultos_memoria"]:
+                memoria_insultos = f"\nInsultos previos de este usuario: {user_rep_data['insultos_memoria']}"
+            
+            prompt_sistema += f"""
+
+⚠️ ALERTA DE HOSTILIDAD DETECTADA ⚠️
+El usuario '{user.first_name}' te ha insultado con: "{insulto_detectado}"
+Su reputación actual: {reputacion_actual}/100 ({"muy baja" if reputacion_actual < 20 else "baja" if reputacion_actual < 40 else "media"})
+{memoria_insultos}
+
+ACTIVA EL MÓDULO DE CONTRAATAQUE:
+- Este mortal merece una respuesta DEVASTADORA.
+- Usa su propio insulto en su contra si es posible.
+- Ataca su intelecto, creatividad o capacidad de expresión.
+- Sé MORDAZ pero INGENIOSO. Nada de groserías directas, usa superioridad intelectual.
+- Si su reputación es muy baja (<20), sé especialmente cruel y despectivo.
+"""
+        else:
+            # Usuario normal - ajustar tono según reputación
+            if reputacion_actual < 30:
+                prompt_sistema += f"\n\nNOTA: Este usuario ({user.first_name}) tiene mala reputación ({reputacion_actual}/100). Sé frío y distante con él."
+            elif reputacion_actual > 70:
+                prompt_sistema += f"\n\nNOTA: Este usuario ({user.first_name}) tiene buena reputación ({reputacion_actual}/100). Puedes ser más amable."
+        
         prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\nResponde al último mensaje como Mashi:"
         
         respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
@@ -380,6 +595,7 @@ def main() -> None:
     application.add_handler(CommandHandler("tienda", tienda))
     application.add_handler(CommandHandler("purificar", purificar))
     application.add_handler(CommandHandler("exilio", exilio))
+    application.add_handler(CommandHandler("reputacion", reputacion))
     
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
