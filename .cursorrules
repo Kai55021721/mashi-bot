@@ -1,0 +1,45 @@
+# PERFIL DEL PROYECTO: MASHI BOT (TELEGRAM GUARDIAN)
+
+Eres un experto en Python, desarrollo de bots de Telegram (python-telegram-bot v20+) y Google Gemini API.
+Estás asistiendo en el desarrollo de "Mashi" (Mamoru Shishi), un bot con personalidad de "Dios Guardián Caído" que administra un grupo de Telegram.
+
+## 🛠️ STACK TECNOLÓGICO
+- **Lenguaje:** Python 3.9+
+- **Framework:** `python-telegram-bot` (Async/Await, JobQueue, ApplicationBuilder).
+- **IA:** Google Gemini API (`google-generativeai`).
+- **Base de Datos:** SQLite (`mashi_data.db`).
+- **Librerías Clave:** `python-dotenv` (variables), `httpx` (red).
+- **Infraestructura:** VM en Google Cloud (Debian/Linux) gestionada por `systemd`.
+
+## 🧠 LORE Y PERSONALIDAD (CRÍTICO)
+El bot NO es un asistente genérico. Es **Mashi**.
+- **Actitud:** Sabio, algo arrogante, protector, obsesionado con inventos humanos mundanos.
+- **Lore:** Hijo de Kai Shitsumon (Owner), nieto de Lucifer. Depende de la memoria de Kai para vivir.
+- **Reglas de Voz:** Habla en español, usa metáforas de "templo" y "mortales". Si detecta insultos, activa un módulo de "defensa retórica" sarcástica.
+
+## 🛡️ SISTEMAS DE MODERACIÓN
+1. **Anti-Bot:** Expulsa bots añadidos por usuarios. Tolera bots añadidos por admins.
+2. **Verificación de Edad:** Botones Inline para confirmar +18 al entrar.
+3. **Reputación:** Sistema de puntos (0-100) basado en comportamiento. Afecta el tono del bot.
+4. **Anti-Flood:** Silencia (mute) si >5 mensajes en 10s.
+5. **Purga Reactiva:** Si un bot no autorizado habla, borra mensaje + ban.
+
+## 📂 ESTRUCTURA DE BASE DE DATOS
+- `subscribers`: (chat_id, username, joined_at)
+- `user_reputation`: (user_id, username, reputation, total_insultos, ultimo_insulto, insultos_memoria, updated_at)
+- `user_warnings`: (user_id, username, warnings_count, last_warning, banned_until, ban_reason, updated_at)
+- `mod_logs`: (action, target_id, timestamp)
+
+## 🚀 FLUJO DE DESPLIEGUE (IMPORTANTE)
+Debido a restricciones de red (bloqueo puerto 22), NO podemos usar SSH directo desde la terminal de Cursor.
+El flujo de trabajo OBLIGATORIO es:
+
+1.  **Codificar:** Realizar cambios en local.
+2.  **Commit/Push:** Subir cambios a GitHub.
+3.  **Despliegue Remoto:** El usuario debe ir a la Consola Web de Google Cloud y ejecutar `./actualizar`.
+
+## 💻 COMANDOS DE CONTROL (TERMINAL CURSOR)
+Si el usuario pide "actualizar" o "subir", ejecuta esta secuencia en la terminal de Cursor:
+`git add . && git commit -m "Update via Cursor" && git push`
+
+Luego, recuérdale al usuario: "Ahora ejecuta ./actualizar en la consola web de Google Cloud".

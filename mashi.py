@@ -79,6 +79,12 @@ RELATOS_DEL_GUARDIAN = [
     "La perseverancia de los mortales es una luz fugaz, pero brillante, en la inmensidad del tiempo."
 ]
 
+SALUDOS_HOLA_LEON = [
+    "🦁 {mortal}, mi melena dorada escucha tu llamado. ¿Qué buscas en este templo?",
+    "🔥 {mortal}, tu saludo ilumina los vitrales del santuario. Avanza con reverencia.",
+    "🌤️ {mortal}, el león despierta y responde: tu voz mantiene vivo este refugio."
+]
+
 # Datos de referencia para estimación de edad de cuentas (basado en getids)
 TELEGRAM_ID_AGES = {
     2768409: 1383264000000,    # ~2013
@@ -741,6 +747,17 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # BLOQUE 8: LÓGICA CONVERSACIONAL Y EVENTOS
 ###############################################################################
 
+@restricted_access
+async def saludo_hola_leon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Responde saludos dirigidos al 'León' con el tono del templo."""
+    if not update.message:
+        return
+
+    mortal = update.effective_user.mention_html() if update.effective_user else "mortal"
+    texto = random.choice(SALUDOS_HOLA_LEON).format(mortal=mortal)
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+
+
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not GEMINI_API_KEY: return
     if not update.message or not update.message.text: return
@@ -992,6 +1009,7 @@ def main() -> None:
     
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
+    application.add_handler(MessageHandler(filters.Regex(r'(?i)\bHola\s+Le(?:ó|o)n\b'), saludo_hola_leon))
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))
