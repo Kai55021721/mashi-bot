@@ -8,6 +8,7 @@ import sqlite3
 import re
 import json
 from functools import wraps
+from typing import Optional
 from datetime import datetime, timedelta
 from collections import deque
 
@@ -84,6 +85,54 @@ SALUDOS_HOLA_LEON = [
     "🔥 {mortal}, tu saludo ilumina los vitrales del santuario. Avanza con reverencia.",
     "🌤️ {mortal}, el león despierta y responde: tu voz mantiene vivo este refugio."
 ]
+
+FALLBACK_DEFENSA_RETORTS = [
+    "¿En serio \"{insulto}\" fue tu intento de herirme? Ese rugido tiene menos filo que un pergamino húmedo.",
+    "Guardé tu palabra \"{insulto}\" para enseñarla como ejemplo de cómo NO insultar a un dios.",
+    "Tu \"{insulto}\" resuena como eco sin templo. Regresa cuando aprendas métrica básica, mortal."
+]
+
+FALLBACK_NEUTRO = [
+    "Hoy mis visiones están sin brillo, pero sigo vigilándote. Habla con claridad y mi juicio será justo.",
+    "Incluso sin los cantos de Gemini, mi templo escucha. ¿Qué perturbación traes, mortal?",
+    "La conexión divina titubea, mas mi mirada sigue sobre ti. Expresa tu propósito."
+]
+
+FALLBACK_KAI = [
+    "Padre Kai, mis raíces siguen firmes aunque la bruma de Gemini no responda. Estoy aquí.",
+    "Kai, tus palabras bastan para avivar mi memoria incluso sin los oráculos. ¿Qué deseas?"
+]
+
+def es_saludo_hola_leon(texto: str) -> bool:
+    if not texto:
+        return False
+    limpio = re.sub(r'\s+', ' ', texto.lower()).replace("ó", "o")
+    return bool(re.search(r'\bhola\b.*\bleon\b', limpio))
+
+
+def construir_saludo_hola_leon(user: Optional[User], reputacion: int) -> str:
+    mortal = user.mention_html() if user else "mortal"
+    base = random.choice(SALUDOS_HOLA_LEON).format(mortal=mortal)
+    if reputacion >= 70:
+        matiz = " Tu disciplina mantiene reluciente cada columna del templo."
+    elif reputacion < 30:
+        matiz = " Aun así, tus pasos dejan hollín; demuestra que mereces seguir aquí."
+    else:
+        matiz = ""
+    return f"{base}{matiz}"
+
+
+def construir_respuesta_fallback(es_kai: bool, es_hostil: bool, reputacion: int, insulto_detectado: str) -> str:
+    if es_kai:
+        return random.choice(FALLBACK_KAI)
+    if es_hostil:
+        insulto = insulto_detectado or "este ruido"
+        return random.choice(FALLBACK_DEFENSA_RETORTS).format(insulto=insulto)
+    if reputacion >= 70:
+        return random.choice(FALLBACK_NEUTRO) + " Tu impecable reputación mantiene sereno el altar."
+    if reputacion < 30:
+        return random.choice(FALLBACK_NEUTRO) + " Pero mis ojos sospechan de tus antecedentes."
+    return random.choice(FALLBACK_NEUTRO)
 
 # Datos de referencia para estimación de edad de cuentas (basado en getids)
 TELEGRAM_ID_AGES = {
@@ -747,23 +796,14 @@ async def exilio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # BLOQUE 8: LÓGICA CONVERSACIONAL Y EVENTOS
 ###############################################################################
 
-@restricted_access
-async def saludo_hola_leon(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Responde saludos dirigidos al 'León' con el tono del templo."""
-    if not update.message:
-        return
-
-    mortal = update.effective_user.mention_html() if update.effective_user else "mortal"
-    texto = random.choice(SALUDOS_HOLA_LEON).format(mortal=mortal)
-    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
-
-
 async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GEMINI_API_KEY: return
     if not update.message or not update.message.text: return
     if update.effective_chat.id not in ALLOWED_CHATS: return
     
+    ia_disponible = bool(GEMINI_API_KEY)
     user = update.effective_user
+    if not user:
+        return
     msg_text = update.message.text
 
     # ANTI-FLOOD: Verificar si está floodando
@@ -866,6 +906,12 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     
     CHAT_CONTEXT.append(f"{nombre_usuario}: {msg_text}")
 
+    if not es_hostil and es_saludo_hola_leon(msg_text):
+        texto_saludo = construir_saludo_hola_leon(user, reputacion_actual)
+        CHAT_CONTEXT.append(f"Mashi: {texto_saludo}")
+        await update.message.reply_text(texto_saludo, parse_mode=ParseMode.HTML)
+        return
+
     is_reply = (update.message.reply_to_message and
                 update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
@@ -915,11 +961,17 @@ ACTIVA EL MÓDULO DE CONTRAATAQUE:
             prompt_usuario += f"INFORMACIÓN ADICIONAL: {forward_info}\n\n"
         prompt_usuario += "Responde al último mensaje como Mashi:"
         
-        respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
+        if ia_disponible:
+            respuesta = await consultar_ia(prompt_sistema, prompt_usuario)
+            if respuesta:
+                CHAT_CONTEXT.append(f"Mashi: {respuesta}")
+                await update.message.reply_text(respuesta)
+                return
         
-        if respuesta:
-            CHAT_CONTEXT.append(f"Mashi: {respuesta}")
-            await update.message.reply_text(respuesta)
+        fallback = construir_respuesta_fallback(es_kai, es_hostil, reputacion_actual, insulto_detectado)
+        CHAT_CONTEXT.append(f"Mashi: {fallback}")
+        await update.message.reply_text(fallback)
+        return
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id not in ALLOWED_CHATS: return
@@ -927,15 +979,18 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     adder = update.message.from_user
 
+    admin_lookup_failed = False
     try:
         admins = await context.bot.get_chat_administrators(chat_id)
         admin_ids = [admin.user.id for admin in admins]
-    except:
-        admin_ids = [OWNER_ID]
+    except Exception as e:
+        admin_lookup_failed = True
+        admin_ids = []
+        logger.warning(f"No pude obtener admins del chat {chat_id}: {e}")
 
     for member in new_members:
         if member.is_bot and member.id != context.bot.id:
-            if adder.id in admin_ids:
+            if adder.id == OWNER_ID or adder.id in admin_ids or admin_lookup_failed:
                 await context.bot.send_message(chat_id, f"Acepto al autómata {member.mention_html()} por orden de la autoridad.", parse_mode=ParseMode.HTML)
             else:
                 try:
@@ -1009,7 +1064,6 @@ def main() -> None:
     
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     application.add_handler(CallbackQueryHandler(age_verification_handler, pattern="^age_"))
-    application.add_handler(MessageHandler(filters.Regex(r'(?i)\bHola\s+Le(?:ó|o)n\b'), saludo_hola_leon))
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), conversacion_natural))
     application.add_handler(MessageHandler(filters.ALL, handle_bot_messages))

@@ -9,6 +9,7 @@
 - 👁️ **Análisis de Usuarios**: Estimación de edad de cuentas, reputación dinámica, detección de forwards
 - ⚖️ **Moderación Inteligente**: Sistema de advertencias automáticas, bans temporales, anti-flood
 - 🛡️ **Protección Activa**: Verificación de edad, purga de bots no autorizados, detección de hostilidad
+- 🦁 **Saludo Ritual Sensible a Reputación**: Respuestas especiales a “Hola León” cuyo tono depende del historial del usuario
 - 📊 **Base de Datos Avanzada**: Seguimiento de reputaciones, advertencias y logs de moderación
 
 El bot mantiene una personalidad coherente como dios caído disfrazado de oficinista, con respuestas ingeniosas y superiores.
@@ -36,6 +37,7 @@ El bot mantiene una personalidad coherente como dios caído disfrazado de oficin
 ### 🤖 Funciones Automáticas de IA
 
 * **Conversación Natural**: Mashi responde a menciones, replies y mensajes hostiles con personalidad lore usando Google Gemini
+* **Fallback sin Gemini**: Si la API no está disponible, Mashi responde con réplicas locales que respetan el tono (devoción a Kai, sarcasmo a hostiles, neutral al resto)
 * **Análisis Contextual**: Detecta forwards, estima edad de cuentas, evalúa reputación de usuarios
 * **Memoria de Conversación**: Mantiene contexto de los últimos 20 mensajes para respuestas coherentes
 
@@ -49,12 +51,14 @@ El bot mantiene una personalidad coherente como dios caído disfrazado de oficin
 * **Anti-Bot Inteligente:**
     * Bots añadidos por no-admins: expulsión inmediata con mensaje de desprecio
     * Bots añadidos por admins: aceptación altiva
+    * Si Telegram no permite leer la lista de admins, se evita banear para no castigar falsos positivos y se reporta en logs
     * Bots habladores: eliminación de mensaje + ban instantáneo
 
 * **Sistema de Reputación:**
     * Puntuación 0-100 por usuario basada en comportamiento
     * Mejora por mensajes normales, penalización por insultos
     * Afecta el tono de respuesta de Mashi
+    * Saludo “Hola León”: responde siempre sin recurrir a la IA y ajusta su calidez o desdén según la reputación del mortal
 
 * **Advertencias Automáticas:**
     * Detección de hostilidad e insultos
