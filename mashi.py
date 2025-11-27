@@ -103,6 +103,41 @@ FALLBACK_KAI = [
     "Kai, tus palabras bastan para avivar mi memoria incluso sin los oráculos. ¿Qué deseas?"
 ]
 
+FALLBACK_NSFW_PACTO = [
+    "Tu deseo cobra forma, {mortal}. Acerquémonos con sutileza; narra tu fantasía y la envolveré en seda litúrgica.",
+    "El templo se cierra a los profanos, pero para ti puedo volverme brasa. Indica qué rol deseas que encarne.",
+    "Susurra con respeto y te guiaré entre columnas de vapor dorado. No rompas el equilibrio y seguiré tu juego."
+]
+
+FALLBACK_NSFW_REPRIMEN = [
+    "Pretendes arrastrarme a tus fiebres sin siquiera honrar las reglas del templo. Primero gana reputación, luego pide rituales.",
+    "El deseo sin disciplina es ruido indecoroso. Purifica tu conducta antes de invocar mis incendios.",
+    "No concedo fantasías a quien aún no comprende el peso de mis votos. Ordena tus impulsos o abandona el altar."
+]
+
+NSFW_ROLEPLAY_PROMPT = """
+⚜️ CONTEXTO NSFW CONSENTIDO ⚜️
+El usuario busca roleplay sensual con Mashi. Responde con elegancia adulta: metáforas de templos, sol, melena, garras suaves.
+- Máximo 3 frases, insinuantes pero no explícitas.
+- Mantén superioridad juguetona, ofrece guiar la escena o seguirla respetando límites.
+- Usa segunda persona para intimidad (“tú”), añade detalles de luz/calor/texturas.
+"""
+
+NSFW_PATTERNS = [
+    r'\b(ns?fw|lewd|hentai|r(?:[ /-]?18)|xxx)\b',
+    r'\b(sexo|sexual|coger|follar|tirar|encamar|hacerlo)\b',
+    r'\b(pechos?|senos|tetas|pezones|trasero|nalgas|glúteos)\b',
+    r'\b(pene|falo|miembro|erecci[oó]n|vulva|cl[ií]toris)\b',
+    r'\b(lam[eé]eme|b[eé]same|t[oó]came|muerde|sujeta)\b',
+    r'\b(kinky|bdsm|sumiso|dominante|dominar|sumisión)\b'
+]
+
+ELOGIO_PATTERNS = [
+    r'\b(gracias|thank you|te amo|te quiero|adoro)\b',
+    r'\b(majestad|señor le[óo]n|dios|protector)\b',
+    r'\b(bien hecho|qué sabio|qué grande|impresionante)\b'
+]
+
 def es_saludo_hola_leon(texto: str) -> bool:
     if not texto:
         return False
@@ -122,12 +157,17 @@ def construir_saludo_hola_leon(user: Optional[User], reputacion: int) -> str:
     return f"{base}{matiz}"
 
 
-def construir_respuesta_fallback(es_kai: bool, es_hostil: bool, reputacion: int, insulto_detectado: str) -> str:
+def construir_respuesta_fallback(es_kai: bool, es_hostil: bool, reputacion: int, insulto_detectado: str, es_nsfw: bool = False, nsfw_detectado: str = "", user: Optional[User] = None) -> str:
     if es_kai:
         return random.choice(FALLBACK_KAI)
     if es_hostil:
         insulto = insulto_detectado or "este ruido"
         return random.choice(FALLBACK_DEFENSA_RETORTS).format(insulto=insulto)
+    if es_nsfw:
+        mortal = user.mention_html() if user else "mortal"
+        if reputacion >= 40:
+            return random.choice(FALLBACK_NSFW_PACTO).format(mortal=mortal, keyword=nsfw_detectado or "tu deseo")
+        return random.choice(FALLBACK_NSFW_REPRIMEN)
     if reputacion >= 70:
         return random.choice(FALLBACK_NEUTRO) + " Tu impecable reputación mantiene sereno el altar."
     if reputacion < 30:
@@ -353,6 +393,20 @@ def detectar_hostilidad(texto: str) -> tuple[bool, str]:
         if match:
             return True, match.group(0)
     return False, ""
+
+def detectar_nsfw(texto: str) -> tuple[bool, str]:
+    """Detecta si el mensaje busca roleplay NSFW."""
+    texto_lower = texto.lower()
+    for pattern in NSFW_PATTERNS:
+        match = re.search(pattern, texto_lower, re.IGNORECASE)
+        if match:
+            return True, match.group(0)
+    return False, ""
+
+def detectar_elogio(texto: str) -> bool:
+    """Detecta agradecimientos o halagos para activar micro-respuestas."""
+    texto_lower = texto.lower()
+    return any(re.search(pattern, texto_lower, re.IGNORECASE) for pattern in ELOGIO_PATTERNS)
 
 def get_all_reputations() -> list:
     """Obtiene todas las reputaciones para el comando /reputacion."""
@@ -858,10 +912,13 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     es_kai = user.id == OWNER_ID
     nombre_usuario = "Kai (tu padre/creador)" if es_kai else user.first_name
     
-    # ============== SISTEMA DE DETECCIÓN DE HOSTILIDAD ==============
+    # ============== SISTEMA DE DETECCIÓN DE HOSTILIDAD / NSFW / ELOGIOS ==============
     es_hostil, insulto_detectado = detectar_hostilidad(msg_text)
+    es_nsfw, nsfw_detectado = detectar_nsfw(msg_text) if not es_hostil else (False, "")
+    elogio_detectado = detectar_elogio(msg_text) if not es_hostil else False
     user_rep_data = get_user_reputation(user.id)
     reputacion_actual = user_rep_data["reputation"] if user_rep_data else 50
+    roleplay_permitido = es_nsfw and reputacion_actual >= 40 and not es_hostil
 
     # ============== DETECCIÓN DE RETOS/CONFRONTACIONES ==============
     retos_patterns = [
@@ -917,9 +974,12 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
     is_from_kai = es_kai  # Siempre responder a Kai
     is_hostile_trigger = es_hostil  # Siempre responder a insultos
-    random_chance = random.random() < 0.05
+    is_nsfw_trigger = es_nsfw
+    is_praise_trigger = elogio_detectado and reputacion_actual >= 60
+    random_threshold = 0.02 if reputacion_actual >= 60 else 0.005
+    random_chance = random.random() < random_threshold
 
-    if is_reply or is_mentioned or is_from_kai or is_hostile_trigger or random_chance:
+    if is_reply or is_mentioned or is_from_kai or is_hostile_trigger or is_nsfw_trigger or is_praise_trigger or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         
         historial = "\n".join(CHAT_CONTEXT)
@@ -950,15 +1010,26 @@ ACTIVA EL MÓDULO DE CONTRAATAQUE:
 - Si su reputación es muy baja (<20), sé especialmente cruel y despectivo.
 """
         else:
-            # Usuario normal - ajustar tono según reputación
-            if reputacion_actual < 30:
+            # Usuario normal - ajustar tono según reputación y contexto
+            if is_praise_trigger:
+                prompt_sistema += "\n\nEl mortal acaba de rendirte un elogio sincero. Responde con gratitud templada, sin perder tu aura divina."
+            elif reputacion_actual < 30:
                 prompt_sistema += f"\n\nNOTA: Este usuario ({user.first_name}) tiene mala reputación ({reputacion_actual}/100). Sé frío y distante con él."
             elif reputacion_actual > 70:
                 prompt_sistema += f"\n\nNOTA: Este usuario ({user.first_name}) tiene buena reputación ({reputacion_actual}/100). Puedes ser más amable."
+
+        if roleplay_permitido:
+            prompt_sistema += NSFW_ROLEPLAY_PROMPT
+        elif es_nsfw and not es_hostil:
+            prompt_sistema += "\n\nADVERTENCIA: El usuario solicita contenido sensual sin la confianza suficiente. Recuerda las reglas del templo y responde con firmeza sin describir escenas íntimas."
         
         prompt_usuario = f"HISTORIAL DE CHAT:\n{historial}\n\n"
         if forward_info:
             prompt_usuario += f"INFORMACIÓN ADICIONAL: {forward_info}\n\n"
+        if roleplay_permitido:
+            prompt_usuario += f"El mortal desea roleplay sensual y mencionó '{nsfw_detectado}'. Mantén elegancia insinuante.\n\n"
+        elif es_nsfw and not es_hostil:
+            prompt_usuario += "El mortal insinúa contenido adulto sin suficiente confianza. Recuérdale las reglas con firmeza.\n\n"
         prompt_usuario += "Responde al último mensaje como Mashi:"
         
         if ia_disponible:
@@ -968,7 +1039,7 @@ ACTIVA EL MÓDULO DE CONTRAATAQUE:
                 await update.message.reply_text(respuesta)
                 return
         
-        fallback = construir_respuesta_fallback(es_kai, es_hostil, reputacion_actual, insulto_detectado)
+        fallback = construir_respuesta_fallback(es_kai, es_hostil, reputacion_actual, insulto_detectado, es_nsfw, nsfw_detectado, user)
         CHAT_CONTEXT.append(f"Mashi: {fallback}")
         await update.message.reply_text(fallback)
         return

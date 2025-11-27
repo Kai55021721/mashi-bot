@@ -10,6 +10,7 @@
 - ⚖️ **Moderación Inteligente**: Sistema de advertencias automáticas, bans temporales, anti-flood
 - 🛡️ **Protección Activa**: Verificación de edad, purga de bots no autorizados, detección de hostilidad
 - 🦁 **Saludo Ritual Sensible a Reputación**: Respuestas especiales a “Hola León” cuyo tono depende del historial del usuario
+- 🔥 **Roleplay NSFW con Filtro**: Responde de forma sensual sólo a mortales de buena reputación, reprende a los imprudentes
 - 📊 **Base de Datos Avanzada**: Seguimiento de reputaciones, advertencias y logs de moderación
 
 El bot mantiene una personalidad coherente como dios caído disfrazado de oficinista, con respuestas ingeniosas y superiores.
@@ -36,7 +37,7 @@ El bot mantiene una personalidad coherente como dios caído disfrazado de oficin
 
 ### 🤖 Funciones Automáticas de IA
 
-* **Conversación Natural**: Mashi responde a menciones, replies y mensajes hostiles con personalidad lore usando Google Gemini
+* **Conversación Natural**: Mashi responde a menciones, replies y mensajes hostiles con personalidad lore usando Google Gemini, además de elogios y peticiones NSFW autorizadas
 * **Fallback sin Gemini**: Si la API no está disponible, Mashi responde con réplicas locales que respetan el tono (devoción a Kai, sarcasmo a hostiles, neutral al resto)
 * **Análisis Contextual**: Detecta forwards, estima edad de cuentas, evalúa reputación de usuarios
 * **Memoria de Conversación**: Mantiene contexto de los últimos 20 mensajes para respuestas coherentes
@@ -59,7 +60,14 @@ El bot mantiene una personalidad coherente como dios caído disfrazado de oficin
     * Mejora por mensajes normales, penalización por insultos
     * Afecta el tono de respuesta de Mashi
     * Saludo “Hola León”: responde siempre sin recurrir a la IA y ajusta su calidez o desdén según la reputación del mortal
+    * Peticiones NSFW: solo los usuarios con reputación ≥40 reciben roleplay sensual; el resto recibe reprimenda
 
+### 🔥 Roleplay Sensual Moderado
+
+- Detección automática de palabras clave NSFW con regex.
+- Si la reputación ≥40 y no hay hostilidad, Mashi cambia a un prompt erótico-elegante (3 frases máximo, metáforas de templo).
+- Con reputación baja, responde con advertencias sobre las reglas del santuario.
+- Incluso sin Gemini, existen respuestas locales que continúan el roleplay o frenan el exceso según corresponda.
 * **Advertencias Automáticas:**
     * Detección de hostilidad e insultos
     * Sistema de retos: si usuario reta a Mashi con reputación baja → advertencia automática
