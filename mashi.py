@@ -973,11 +973,21 @@ async def conversacion_natural(update: Update, context: ContextTypes.DEFAULT_TYP
                 update.message.reply_to_message.from_user.id == context.bot.id)
     is_mentioned = re.search(r"(mashi|guardián|león|mamoru)", msg_text, re.IGNORECASE)
     is_from_kai = es_kai  # Siempre responder a Kai
-    is_hostile_trigger = es_hostil  # Siempre responder a insultos
-    is_nsfw_trigger = es_nsfw
-    is_praise_trigger = elogio_detectado and reputacion_actual >= 60
-    random_threshold = 0.02 if reputacion_actual >= 60 else 0.005
-    random_chance = random.random() < random_threshold
+    is_group = update.effective_chat.type in ['group', 'supergroup']
+
+    # En grupos, solo responder si es reply al bot o de Kai para evitar confusiones con comentarios de canal
+    if is_group and not (is_reply or is_from_kai):
+        is_mentioned = False
+        is_hostile_trigger = False
+        is_nsfw_trigger = False
+        is_praise_trigger = False
+        random_chance = False
+    else:
+        is_hostile_trigger = es_hostil and (is_reply or is_mentioned)  # Solo responder a insultos dirigidos al bot
+        is_nsfw_trigger = es_nsfw
+        is_praise_trigger = elogio_detectado and reputacion_actual >= 60
+        random_threshold = 0.0001 if reputacion_actual >= 60 else 0.00005  # Muy baja probabilidad de iniciar conversación
+        random_chance = random.random() < random_threshold
 
     if is_reply or is_mentioned or is_from_kai or is_hostile_trigger or is_nsfw_trigger or is_praise_trigger or random_chance:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
